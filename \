@@ -1,0 +1,160 @@
+module Main (main) where
+
+import qualified UI.HSCurses.Curses as Curses
+import System.IO
+import System.Environment (getArgs, getProgName)
+import System.Directory
+import System.Exit (exitSuccess, exitFailure)
+import System.Posix.Signals
+import Control.Concurrent
+import Control.Monad (when)
+
+data Vec2 = Vec2 Float Float
+data IVec2 = IVec2 { x :: Int, y :: Int }
+
+data Squire = Squire {
+    scrY :: Int,
+    scrX :: Int,
+    modifier :: Int
+}
+
+
+instance Eq IVec2 where
+    v1 == v2 = x v1 == x v2 && y v1 == y v2
+
+up :: Char
+up = 'k'
+
+left :: Char
+left = 'h'
+
+right :: Char
+right = 'l'
+
+down :: Char
+down = 'j'
+
+editorLoop :: [String] -> IO ()
+editorLoop content = do
+    putStrLn "\nCommands: ';w' to write, ';q' to quit, or type to add line."
+    line <- getLine
+    case line of
+        ";q" -> putStrLn "Exiting."
+        ";w" -> do
+            putStrLn "Enter filename to save:"
+            filename <- getLine
+            writeFile filename (unlines content)
+            putStrLn "File saved."
+            editorLoop content
+        _ -> editorLoop (content ++ [line])
+
+printArgs :: [String] -> IO ()
+printArgs [] = putStr "\n"
+printArgs (arg:args) = putStrLn arg
+
+
+openThisFile :: String -> IO ()
+openThisFile filename = do
+    content <- readFile filename
+    putStrLn $ content
+
+
+moveAbout :: Squire -> Int -> Int -> IO ()
+moveAbout sqr pY pX = do
+    Curses.erase -- clear curses's virtual screen but don't force a redraw
+    
+    Curses.wMove Curses.stdScr pY pX 
+    
+    Curses.refresh -- copy the virtual screen to the terminal
+    c <- Curses.getCh
+    case (c) of
+        Curses.KeyUp -> attemptToMove sqr ((pY - 1) - (modifier sqr) ) pX
+        Curses.KeyChar 'k' -> attemptToMove sqr ((pY - 1) - (modifier sqr) ) pX
+
+        Curses.KeyDown -> attemptToMove sqr ((pY + 1) + (modifier sqr) ) pX
+        Curses.KeyChar 'j' -> attemptToMove sqr ((pY + 1) + (modifier sqr)  pX
+
+        Curses.KeyLeft -> attemptToMove sqr pY ((pX - 1) - (modifier sqr) )
+        Curses.KeyChar 'h' -> attemptToMove sqr pY ((pX - 1) - (modifier sqr) )
+
+        Curses.KeyRight -> attemptToMove sqr pY ((pX + 1) + (modifier sqr) )
+        Curses.KeyChar 'l' -> attemptToMove sqr pY ((pX + 1) + (modifier sqr) )
+        
+        Curses.KeyChar 'q' -> return ()
+
+        Curses.KeyChar '5' -> updateModifier '5'   
+
+        _ -> return ()
+
+    where
+
+        updateModifier num =
+            moveAbout (Squire (scrY sqr) (scrX sqr) 5) pY pX
+
+        attemptToMove :: Squire -> Int -> Int -> IO ()
+        attemptToMove sqr y x = do
+            let s = Squire (scrY sqr) (scrX sqr) 0 in
+                moveAbout s newY newX
+            where
+                newX = 
+                    if x <= 0 then 0 
+                    else if x >= (scrX sqr) then (scrX sqr)
+                    else x
+                newY = if y <= 0 then 0 else y
+
+getScreenSize :: IO IVec2
+getScreenSize = do
+    (x, y) <- Curses.scrSize
+    return (IVec2 x y)
+
+
+main :: IO ()
+main = do
+
+    done <- newEmptyMVar
+
+    let handler = do
+            --putStrLn ""
+            --putStrLn "interrupt"
+            --Curses.cursSet Curses.CursorVisible
+            putMVar done ()
+            exitSuccess
+    
+    installHandler keyboardSignal (Catch handler) Nothing
+    --takeMVar done
+    --putStrLn "exiting"
+
+    args <- getArgs
+
+    out <- if length args /= 1 then
+        do
+            p <- getProgName
+            putStrLn ("Usage: " ++ p ++ " <filename>")
+            exitFailure
+    else
+        do
+            Curses.initCurses
+            Curses.keypad Curses.stdScr True
+            Curses.echo False
+            --Curses.cursSet Curses.CursorInvisible
+            size <- getScreenSize
+            
+            let sqr = Squire (y size) (x size) 0 in do 
+                moveAbout sqr 0 0 
+                Curses.endWin
+
+                Curses.cursSet Curses.CursorVisible
+
+    --isFile <- doesFileExist $ head args
+
+    --if isFile then
+    --    let filename = head args in
+    --    openThisFile filename
+    --else
+    --    putStrLn "Salutations my lord, your squire at your service."
+        -- putStrLn "Enter a file name:"
+    -- fname <- getLine
+    -- content <- readFile fname
+    -- putStrLn "\nFile contents:\n"
+    -- editorLoop (lines content)
+    exitSuccess
