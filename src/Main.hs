@@ -1,5 +1,8 @@
 module Main (main) where
 
+import Juo
+import Juo.Settings
+
 import qualified UI.HSCurses.Curses as Curses
 import System.IO
 import System.Environment (getArgs, getProgName)
@@ -9,50 +12,10 @@ import System.Posix.Signals
 import Control.Concurrent
 import Control.Monad (when)
 import System.Console.ANSI
+import Data.IORef
+
 
 type FullText = String
-
-data Vec2 = Vec2 Float Float
-data IVec2 = IVec2 { x :: Int, y :: Int }
-
-data DocumentLine = DocumentLine {
-    lineContent :: String,
-    lineLength :: Int
-}
-
-data Document = Document {
-    documentLines :: [DocumentLine],
-    documentLength :: Int
-}
-
-data DocumentPosition = DocumentPosition {
-    line :: Int,
-    col :: Int
-}
-
-data Juo = Juo {
-    scrY :: Int,
-    scrX :: Int,
-    modifier :: [Char],
-
-    documentPosition :: DocumentPosition
-}
-
-
-instance Eq IVec2 where
-    v1 == v2 = x v1 == x v2 && y v1 == y v2
-
-up :: Char
-up = 'k'
-
-left :: Char
-left = 'h'
-
-right :: Char
-right = 'l'
-
-down :: Char
-down = 'j'
 
 editorLoop :: [String] -> IO ()
 editorLoop content = do
@@ -78,17 +41,22 @@ openThisFile filename = do
     content <- readFile filename
     putStrLn $ content
 
-
-switchToInsertMode :: IO ()
-switchToInsertMode = do
-    putStr "\ESC[6 q\STX"
+numDigit :: Integer -> Int
+numDigit = go 1 . abs
+    where
+        go ds n = if n >= 10 then go (ds + 1) (n `div` 10) else ds
 
 
 printFile :: Int -> Int -> [DocumentLine] -> IO ()
-printFile _ 0 _ = return ()
-printFile startY len (line:lines') = do
-    Curses.mvWAddStr Curses.stdScr startY 0 (lineContent line) 
-    printFile (startY + 1) (len - 1) lines'
+printFile y h lines' = printFileLine y h 1 lines' 
+
+    where
+        printFileLine :: Int -> Int -> Int -> [DocumentLine] -> IO ()
+        printFileLine _ _ _ [] = return ()
+        printFileLine _ 0 _ _ = return ()
+        printFileLine startY len lineNo (line:lines') = do
+            Curses.mvWAddStr Curses.stdScr startY 0 ((lineContent line))
+            printFileLine (startY + 1) (len - 1) (lineNo + 1)  lines'
 
 
 write :: Int -> Int -> String -> IO ()
@@ -96,116 +64,122 @@ write y x txt =
     Curses.mvWAddStr Curses.stdScr y x txt
 
 
-startJuo :: Juo -> Int -> Int -> Document -> IO ()
-startJuo juo pY pX content = do
+startJuo :: Document -> UserSettings -> IO ()
+startJuo content settings = do
+    initY <- newIORef 0
+    initX <- newIORef 0
+    initMult <- newIORef "1"
+
+    IVec2 h w <- getScreenSize
+
+
+    initLine <- newIORef 1
+    initCol <- newIORef 1
+
+    let cursor = Cursor { y = initY, x = initX, mult = initMult } in 
+        let juo = Juo {
+            height = h,
+            width = w,
+
+            cursor = cursor,
+
+            currentDocument = content,
+            documentPosition = (DocumentPosition initLine initCol)
+        } in
+            loopJuo juo content settings
+
+
+loopJuo :: Juo -> Document -> UserSettings -> IO ()
+loopJuo juo content settings = do
 
     Curses.erase -- clear curses's virtual screen but don't force a redraw
 
-    printFile 0 6 (documentLines content)
-   
-    write ((scrY juo) - 2) ((scrX juo) - 16) (show (line (documentPosition juo)))
-    write ((scrY juo) - 2) ((scrX juo) - 14) "|"
-    write ((scrY juo) - 2) ((scrX juo) - 12) (show (col (documentPosition juo)))
+    printFile 0 (height juo) (documentLines content)
+
+
+    l <- readIORef(line (documentPosition juo))
+    c <- readIORef(col (documentPosition juo))
+
+
+    write ((height juo) - 2) ((width juo) - 16) (show l)
+    write ((height juo) - 2) ((width juo) - 14) "|"
+    write ((height juo) - 2) ((width juo) - 12) (show c)
     
-    write ((scrY juo) - 1) ((scrX juo) - 8) (modifier juo)
-    
-    Curses.move pY pX 
-    
+    multString <- (readIORef (mult (cursor juo)))
+    write ((height juo) - 1) ((width juo) - 8) multString
+
+    -- NOTE: Always update cursor last!
+    updateCursor juo
+        
     Curses.refresh -- copy the virtual screen to the terminal
     
-
     c <- Curses.getCh
-    case (c) of
-        Curses.KeyUp -> attemptToMove juo ((pY - 1) - _modifier ) pX
-        Curses.KeyChar 'k' -> attemptToMove juo ((pY - 1) - _modifier ) pX
 
-        Curses.KeyDown -> attemptToMove juo ((pY + 1) + _modifier ) pX
-        Curses.KeyChar 'j' -> attemptToMove juo ((pY + 1) + _modifier )  pX
+    shouldQuit <- case (c) of
+        Curses.KeyChar ch
+            | ch == (up settings) ->
+                moveCursor juo Juo.Up >> return False
+            | ch == down settings ->
+                moveCursor juo Juo.Down >> return False
+            | ch == (left settings) -> 
+                moveCursor juo Juo.Left >> return False
+            | ch == (right settings) -> 
+                moveCursor juo Juo.Right >> return False
+            | ch == (delete settings) -> 
+                putStrLn "Not Done" >> return False
 
-        Curses.KeyLeft -> attemptToMove juo pY ((pX - 1) - _modifier )
-        Curses.KeyChar 'h' -> attemptToMove juo pY ((pX - 1) - _modifier )
-
-        Curses.KeyRight -> attemptToMove juo pY ((pX + 1) + _modifier )
-        Curses.KeyChar 'l' -> attemptToMove juo pY ((pX + 1) + _modifier )
         
-        Curses.KeyChar 'q' -> return ()
+        Curses.KeyChar 'q' -> return () >> return True
 
-        Curses.KeyChar '1' -> updateModifier '1'   
-        Curses.KeyChar '2' -> updateModifier '2'   
-        Curses.KeyChar '3' -> updateModifier '3'   
-        Curses.KeyChar '4' -> updateModifier '4'   
-        Curses.KeyChar '5' -> updateModifier '5'   
-        Curses.KeyChar '6' -> updateModifier '6'   
-        Curses.KeyChar '7' -> updateModifier '7'   
-        Curses.KeyChar '8' -> updateModifier '8'   
-        Curses.KeyChar '9' -> updateModifier '9'   
+        Curses.KeyChar d | d `elem` ['1'..'9'] -> 
+            updateMult juo d >> return False
 
-        Curses.KeyChar 'x' -> do
-            putStrLn "Not Done"
-            startJuo juo pY pX content
-
-        Curses.KeyChar '$' -> do
-            startJuo juo pY endOfLine content 
+        {-Curses.KeyChar '$' -> do
+            loopJuo juo pY endOfLine content 
 
         Curses.KeyChar '0' -> do
             if (modifier juo) /= "" then
                 updateModifier '0'
             else
-                startJuo juo pY 0 content 
+                loopJuo juo pY 0 content 
 
 
-        --
+        -- MacOS uses \DEL rather than backspace
         Curses.KeyChar '\DEL' -> backspace
-        Curses.KeyBackspace -> backspace
+        Curses.KeyBackspace -> backspace-}
 
-        _ -> return ()
-
-    where
+        _ -> return False
+    
+    when (not shouldQuit) (loopJuo juo content settings)
         
+    where
+                
         -- TODO: Consider using the arrays, they are fast.
         -- HACK: `pY` is not representitive of whole doc
-        endOfLine = (lineLength ((documentLines content) !! pY)) - 1
+        {-endOfLine = 
+            if (documentLength content) > 0 then
+                (lineLength ((documentLines content) !! pY)) - 1
+            else 0
 
         backspace :: IO ()
         backspace =
             if buf == [] then
-                startJuo (Juo (scrY juo) (scrX juo) buf (DocumentPosition pY pX)) pY pX content
+                loopJuo (Juo (height juo) (width juo) buf (DocumentPosition pY pX)) pY pX content
             else
-                startJuo (Juo (scrY juo) (scrX juo) (init buf) (DocumentPosition pY pX)) pY pX content
+                loopJuo (Juo (height juo) (width juo) (init buf) (DocumentPosition pY pX)) pY pX content
             where
                 buf = (modifier juo)
 
         _modifier = if (modifier juo) == [] then 0
             else if (modifier juo) == ['1'] then 0
             else read (modifier juo)
-        
-        updateModifier :: Char -> IO ()
-        updateModifier ch = do
-            startJuo (Juo (scrY juo) (scrX juo) ((modifier juo) ++ [ch]) (DocumentPosition pY pX)) pY pX content
-
-        attemptToMove :: Juo -> Int -> Int -> IO ()
-        attemptToMove juo y' x' = do
-            let s = Juo (scrY juo) (scrX juo) [] (DocumentPosition y x) in
-                startJuo s y x content 
-            where
-                isOnEndOfLine = 
-                    if x' == endOfLine then 
-                        True
-                    else
-                        False
-
-                x = 
-                    if x' <= 0 then 0 
-                    else if x' >= endOfLine then endOfLine
-                    else x'
-                y = if y' <= 0 then 0 
-                    else if y' >= (scrY juo) - 1 then (scrY juo) - 1
-                    else y'
+    
+-}
 
 getScreenSize :: IO IVec2
 getScreenSize = do
     (y, x) <- Curses.scrSize
-    return (IVec2 x y)
+    return (IVec2 y x)
 
 
 _parseLine :: [String] -> [DocumentLine]
@@ -246,15 +220,14 @@ main = do
             Curses.initCurses
             Curses.keypad Curses.stdScr True
             Curses.echo False
-            --Curses.cursSet Curses.CursorInvisible
-            size <- getScreenSize
-            
-            let juo = Juo (y size) (x size) [] (DocumentPosition 0 0) in do 
-                content <- readFile (head args) 
-                startJuo juo 0 0 (parseDocument content)
 
-                Curses.endWin
-                Curses.cursSet Curses.CursorVisible
+            --Curses.cursSet Curses.CursorInvisible
+            
+            content <- readFile (head args) 
+            startJuo (parseDocument content) settings
+
+            Curses.endWin
+            Curses.cursSet Curses.CursorVisible
 
     --isFile <- doesFileExist $ head args
 
@@ -269,3 +242,12 @@ main = do
     -- putStrLn "\nFile contents:\n"
     -- editorLoop (lines content)
     exitSuccess
+
+    where
+        settings = UserSettings {
+                up = 'k',
+                down = 'j',
+                left = 'h',
+                right = 'l',
+                delete = 'x'
+            }
