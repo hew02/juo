@@ -5,5 +5,7 @@ data UserSettings = UserSettings {
     down   :: Char,
     left   :: Char,
     right  :: Char,
-    delete :: Char
+    delete :: Char,
+
+    showLineNumbers :: Bool
 }

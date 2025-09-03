@@ -3,19 +3,22 @@ module Main (main) where
 import Juo
 import Juo.Settings
 
-import qualified UI.HSCurses.Curses as Curses
-import System.IO
-import System.Environment (getArgs, getProgName)
-import System.Directory
+import qualified UI.HSCurses.Curses as CUR
+import qualified UI.HSCurses.CursesHelper as CURHELP
+--import System.IO
+import System.Environment (getArgs, getProgName, setEnv, unsetEnv)
+--import System.Directory
+import System.FilePath
 import System.Exit (exitSuccess, exitFailure)
 import System.Posix.Signals
 import Control.Concurrent
+import Data.Char
+--import System.Console.ANSI
 import Control.Monad (when)
-import System.Console.ANSI
-import Data.IORef
 
-
+type FileName = String
 type FullText = String
+
 
 editorLoop :: [String] -> IO ()
 editorLoop content = do
@@ -46,151 +49,258 @@ numDigit = go 1 . abs
     where
         go ds n = if n >= 10 then go (ds + 1) (n `div` 10) else ds
 
-
-printFile :: Int -> Int -> [DocumentLine] -> IO ()
-printFile y h lines' = printFileLine y h 1 lines' 
-
+printFile :: Int -> Int -> Juo -> IO ()
+printFile y h juo = do
+    go y h (document juo)
     where
-        printFileLine :: Int -> Int -> Int -> [DocumentLine] -> IO ()
-        printFileLine _ _ _ [] = return ()
-        printFileLine _ 0 _ _ = return ()
-        printFileLine startY len lineNo (line:lines') = do
-            Curses.mvWAddStr Curses.stdScr startY 0 ((lineContent line))
-            printFileLine (startY + 1) (len - 1) (lineNo + 1)  lines'
+        go _ 0 _  = return ()
+        go _ _ [] = return ()
+        go row n (line:rest) = do
+            Juo.write row 0 ((lineContent line))
+            go (row + 1) (n - 1) rest
 
+writeFileType :: Juo -> IO ()
+writeFileType juo = do
+    let IVec2 winH winW = windowSize juo
+        fileTypeStr = case (documentType juo) of
+            Juo.Haskell -> "Haskell"
+            Juo.PlainText -> "PlainText"
+            Juo.Unknown ext -> ext
 
-write :: Int -> Int -> String -> IO ()
-write y x txt =
-    Curses.mvWAddStr Curses.stdScr y x txt
+    Juo.write (winH - 2) (winW - (length fileTypeStr) - 1) fileTypeStr
 
-
-startJuo :: Document -> UserSettings -> IO ()
-startJuo content settings = do
-    initY <- newIORef 0
-    initX <- newIORef 0
-    initMult <- newIORef "1"
-
-    IVec2 h w <- getScreenSize
-
-
-    initLine <- newIORef 1
-    initCol <- newIORef 1
-
-    let cursor = Cursor { y = initY, x = initX, mult = initMult } in 
-        let juo = Juo {
-            height = h,
-            width = w,
-
-            cursor = cursor,
-
-            currentDocument = content,
-            documentPosition = (DocumentPosition initLine initCol)
-        } in
-            loopJuo juo content settings
-
-
-loopJuo :: Juo -> Document -> UserSettings -> IO ()
-loopJuo juo content settings = do
-
-    Curses.erase -- clear curses's virtual screen but don't force a redraw
-
-    printFile 0 (height juo) (documentLines content)
-
-
-    l <- readIORef(line (documentPosition juo))
-    c <- readIORef(col (documentPosition juo))
-
-
-    write ((height juo) - 2) ((width juo) - 16) (show l)
-    write ((height juo) - 2) ((width juo) - 14) "|"
-    write ((height juo) - 2) ((width juo) - 12) (show c)
+writeMode :: Juo -> IO ()
+writeMode juo = do
+    let IVec2 winH winW = windowSize juo
+        modeStr = case (mode juo) of
+            Juo.Normal  -> "N"
+            Juo.Insert  -> "I"
+            Juo.Select  -> "S"
+            Juo.Command -> "C"
     
-    multString <- (readIORef (mult (cursor juo)))
-    write ((height juo) - 1) ((width juo) - 8) multString
+    CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 3))
+    Juo.write (winH - 2) 1 modeStr
+    CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 2))
+
+
+writeMessage :: Juo -> IO ()
+writeMessage juo = do
+    let IVec2 winH winW = windowSize juo
+    Juo.write (winH - 1) 1 (messageBuf juo)
+
+
+
+startJuo :: Juo -> UserSettings -> IO ()
+startJuo juo settings = do
+
+    (winH, winW) <- CUR.scrSize
+
+    let juo' = juo { cursorPos = (0, 0)
+    , documentPos = (0, 0)
+    , windowSize = IVec2 winH winW
+    , mult = []
+    , currentLineLength = lineLength ((document juo) !! 0)
+    , mode = Juo.Normal
+    , messageBuf = ""
+    }
+
+    loopJuo juo' settings
+
+loopJuo :: Juo -> UserSettings -> IO ()
+loopJuo juo settings = do
+
+    let IVec2 winH winW = windowSize juo
+        (l, c) = documentPos juo
+        (y, x) = cursorPos juo
+
+    CUR.erase -- clear curses's virtual screen but don't force a redraw
+
+    printFile 0 winH juo
+
+    Juo.write (winH - 2) (winW - 16) (show (l + 1))
+    Juo.write (winH - 2) (winW - 14) "|"
+    Juo.write (winH - 2) (winW - 12) (show (c + 1))
+    
+    multString <- getMult juo
+    Juo.write (winH - 1) (winW - 8) multString
+
+    writeFileType juo
+    writeMode juo
+    writeMessage juo
+
 
     -- NOTE: Always update cursor last!
     updateCursor juo
         
-    Curses.refresh -- copy the virtual screen to the terminal
+    CUR.wRefresh CUR.stdScr -- copy the virtual screen to the terminal
     
-    c <- Curses.getCh
+    c <- CUR.getCh
 
-    shouldQuit <- case (c) of
-        Curses.KeyChar ch
+    (juo', shouldContinue) <- case ((mode juo), c) of
+
+        (_, CUR.KeyChar '\ESC') -> do
+            let juo' = case (mode juo) of
+                    Juo.Normal -> juo { mult = [] }
+                    Juo.Command -> juo { messageBuf = "", mode = Juo.Normal }
+                    _          -> juo { mode = Juo.Normal }
+            return (juo', True)
+
+        -- NORMAL MODE BINDINGS
+        (Juo.Normal, CUR.KeyChar ch)
             | ch == (up settings) ->
-                moveCursor juo Juo.Up >> return False
+                let juo' = moveCursor juo Juo.Up in
+                    return (juo', True)
             | ch == down settings ->
-                moveCursor juo Juo.Down >> return False
+                let juo' = moveCursor juo Juo.Down in
+                    return (juo', True)
             | ch == (left settings) -> 
-                moveCursor juo Juo.Left >> return False
+                let juo' = moveCursor juo Juo.Left in
+                    return (juo', True)
             | ch == (right settings) -> 
-                moveCursor juo Juo.Right >> return False
-            | ch == (delete settings) -> 
-                putStrLn "Not Done" >> return False
+                let juo' = moveCursor juo Juo.Right in
+                    return (juo', True)
 
-        
-        Curses.KeyChar 'q' -> return () >> return True
+            | ch == (delete settings) -> do
+                let juo' = deleteChar juo in
+                    return (juo', True)
 
-        Curses.KeyChar d | d `elem` ['1'..'9'] -> 
-            updateMult juo d >> return False
+            | ch `elem` ['1'..'9'] ->
+                let juo' = updateMult juo ch in
+                return (juo', True)
 
-        {-Curses.KeyChar '$' -> do
-            loopJuo juo pY endOfLine content 
+            -- MacOS uses \DEL rather than backspace
+            {-| ch == '\DEL' ->
+                let juo' = handleBackspace juo in
+                    return (juo', True)-}
 
-        Curses.KeyChar '0' -> do
-            if (modifier juo) /= "" then
-                updateModifier '0'
-            else
-                loopJuo juo pY 0 content 
+            | ch == '0' ->
+                let juo' = juo { cursorPos = ((y),0)
+                } in
+                    return (juo', True)
+            | ch == '$' ->
+                let juo' = juo { cursorPos = ((y),(currentLineLength juo) - 1)
+                } in
+                    return (juo', True)
 
 
-        -- MacOS uses \DEL rather than backspace
-        Curses.KeyChar '\DEL' -> backspace
-        Curses.KeyBackspace -> backspace-}
+            | ch == 'w' -> do
+                juo' <- Juo.saveFile juo
+                return (juo', True)
 
-        _ -> return False
-    
-    when (not shouldQuit) (loopJuo juo content settings)
-        
-    where
+            | ch == 'q' -> do
+                return (juo, False)
+
+            -- SWITCH MODE
+            | ch == 'i' -> do
+                let juo' = juo { mode = Juo.Insert
+                } in
+                    return (juo', True)
+
+            | ch == 'o' -> do
+                let juo' = moveCursor juo { mode = Juo.Insert
+                } Juo.Down in
+                    return (juo', True)
+
+            | ch == 's' -> do
+                let juo' = juo { mode = Juo.Select
+                } in
+                    return (juo', True)
+
+            | ch == ';' ->
+                let juo' = juo { mode = Juo.Command
+                , messageBuf = ""
+                } in
+                    return (juo', True)
+
+            | ch == 'a' -> do
+                let juo' = juo { mode = Juo.Insert
+                } in
+                    return (juo', True)
+
+            -- NORMAL MODE SHORTCUTS
+            | ch == 'r' -> do
+                let juo' = juo { mode = Juo.Normal
+                } in
+                    return (juo', True)
                 
-        -- TODO: Consider using the arrays, they are fast.
-        -- HACK: `pY` is not representitive of whole doc
-        {-endOfLine = 
-            if (documentLength content) > 0 then
-                (lineLength ((documentLines content) !! pY)) - 1
-            else 0
+        -- INSERT MODE BINDINGS
+        (Juo.Insert, CUR.KeyChar ch)
+            -- TODO This needs to be implemented properly
+            | ch == '\n' || ch == '\r' -> do
+                let juo' = moveCursor juo Juo.Down in
+                    return (juo', True)
 
+        (Juo.Insert, CUR.KeyChar ch)
+            | isPrint ch -> do
+                let juo' = Juo.addChar juo ch 
+                return (juo', True)
+
+
+        -- COMMAND MODE BINDINGS
+        (Juo.Command, CUR.KeyChar ch)
+            | ch == '\n' || ch == '\r' -> do
+                return (execCommand juo, True)
+
+        (Juo.Command, CUR.KeyChar ch)
+            | isPrint ch -> do
+                let juo' = Juo.addCharToMessage juo ch
+                return (juo', True)
+            | otherwise ->
+                return (juo, True)
+
+        (Juo.Command, CUR.KeyBackspace) -> do
+            let juo' = juo { 
+                messageBuf = if (messageBuf juo) /= "" then (init (messageBuf juo)) else "" 
+            } in
+                return (juo', True)
+
+        (Juo.Normal, _) -> return (juo, True)
+        _ -> return (juo, False)
+
+    CUR.update
+    
+    when shouldContinue (loopJuo juo' settings)
+        
+    {-where
+                
         backspace :: IO ()
         backspace =
             if buf == [] then
-                loopJuo (Juo (height juo) (width juo) buf (DocumentPosition pY pX)) pY pX content
+                loopJuo (Juo (height juo) (width juo) buf (DocumentPosition y x)) y x content
             else
-                loopJuo (Juo (height juo) (width juo) (init buf) (DocumentPosition pY pX)) pY pX content
+                loopJuo (Juo (height juo) (width juo) (init buf) (DocumentPosition y x)) y x content
             where
                 buf = (modifier juo)
 
-        _modifier = if (modifier juo) == [] then 0
+        {-_modifier = if (modifier juo) == [] then 0
             else if (modifier juo) == ['1'] then 0
-            else read (modifier juo)
-    
+            else read (modifier juo)-}
 -}
 
 getScreenSize :: IO IVec2
 getScreenSize = do
-    (y, x) <- Curses.scrSize
+    (y, x) <- CUR.scrSize
     return (IVec2 y x)
 
 
 _parseLine :: [String] -> [DocumentLine]
-_parseLine [] = []
-_parseLine (line:lines) =
-    DocumentLine line (length line) : _parseLine lines
+_parseLine = map (\l -> DocumentLine l (length l))
 
-parseDocument :: FullText -> Document
-parseDocument text =
-    let documentLines = (_parseLine (lines text)) in
-        Document documentLines (length documentLines)
+parseDocument :: FileName -> FullText -> Juo
+parseDocument filename text =
+    let fileType = case takeExtension filename of
+            ".hs" -> Juo.Haskell
+            ".lhs" -> Juo.Haskell
+            ".txt" -> Juo.PlainText
+            ext    -> Juo.Unknown ext
+
+        ls = lines text
+        ds = _parseLine ls
+    in Juo
+        { document       = ds
+        , documentLength = length ds
+        , documentType   = fileType
+        }
 
 main :: IO ()
 main = do
@@ -200,11 +310,11 @@ main = do
     let handler = do
             --putStrLn ""
             --putStrLn "interrupt"
-            --Curses.cursSet Curses.CursorVisible
+            --CUR.cursSet CUR.CursorVisible
             putMVar done ()
             exitSuccess
     
-    installHandler keyboardSignal (Catch handler) Nothing
+    _ <- installHandler keyboardSignal (Catch handler) Nothing
     --takeMVar done
     --putStrLn "exiting"
 
@@ -217,17 +327,63 @@ main = do
             exitFailure
     else
         do
-            Curses.initCurses
-            Curses.keypad Curses.stdScr True
-            Curses.echo False
+            setEnv "ESCDELAY" "0"
 
-            --Curses.cursSet Curses.CursorInvisible
+            --CUR.initCurses
+            CURHELP.start
+            has256Color <- CUR.hasColors
+
+            if not has256Color then do
+                putStrLn "Requires full color support (i.e. xterm-256)"
+                exitSuccess
+            else do
+
+                CUR.startColor
+
+
+                --CUR.initPair (CUR.Pair 1) CURHELP.white CURHELP.defaultColor
+
+                CUR.initColor (CUR.Color 44) (57, 255, 20)
+
+                CUR.initColor (CUR.Color 69) (76, 76, 76)
+
+                CUR.initPair (CUR.Pair 2) CURHELP.white (CUR.Color 69)
+
+                -- Mode 
+                CUR.initPair (CUR.Pair 3) CURHELP.green (CUR.Color 69)
+
+
+
+                --CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 1))
+
+                --let bkgrndColor  = CUR.attrPlus (CURHELP.ForegroundColor CURHELP.RedF) (CURHELP.BackgroundColor CURHELP.DarkBlueB)
+                --CUR.attrBoldOn
+
+                let attr = CUR.setBold CUR.attr0 True
+
+                CUR.bkgrndSet attr (CUR.Pair 2)
+
+
+
+                CUR.keypad CUR.stdScr True
+                CUR.noDelay CUR.stdScr True
+                CUR.echo False
+
+
+                let filename = head args
+                text <- readFile filename
+
+
+                startJuo (parseDocument filename text) settings
+
+
             
-            content <- readFile (head args) 
-            startJuo (parseDocument content) settings
 
-            Curses.endWin
-            Curses.cursSet Curses.CursorVisible
+            --CUR.endWin
+            CURHELP.end
+
+            unsetEnv "ESCDELAY"
+
 
     --isFile <- doesFileExist $ head args
 

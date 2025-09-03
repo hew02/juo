@@ -1,28 +1,35 @@
 module Juo ( 
     Vec2(..), 
     IVec2(..), 
-    Juo(..), 
-    Cursor(..), 
+    Juo(..),
     Direction(..),
-
-    Document(..),
     DocumentLine(..),
-    DocumentPosition(..),
+
+    FileType(..),
+    Mode(..),
 
     moveCursor, 
     updateCursor, 
     updateMult,
-    deleteAtCursor
+    deleteChar,
+    addChar,
+
+    getMult,
+    saveFile,
+    addChar,
+    addCharToMessage,
+    write,
+
+    execCommand
 ) where
 
+import qualified Hasqtan as Hasq
+
 import qualified UI.HSCurses.Curses as CUR
-import Data.IORef
-import Control.Monad
 
 {-
     General Types.
 -}
-
 
 data Vec2 = Vec2 Float Float
     deriving (Show, Eq)
@@ -31,143 +38,194 @@ data IVec2 = IVec2 Int Int
     deriving (Show, Eq)
 
 
-{-
-    Document Types.
--}
+data FileType = Haskell | PlainText | Unknown String
+
+data Mode = Normal | Insert | Select | Command
+    deriving (Eq)
+
+data Token
+    = Number Int
+    | CMD String
+    | Symbol Char
+    deriving (Show, Eq)
+
+data Command 
+    = Print String 
+    | Quit
+    deriving (Show)
 
 data DocumentLine = DocumentLine {
     lineContent :: String,
     lineLength  :: Int
 }
 
-data Document = Document {
-    documentLines  :: [DocumentLine],
-    documentLength :: Int
-}
-
-data DocumentPosition = DocumentPosition {
-    line :: IORef Int,
-    col  :: IORef Int
-}
-
-
-
 data Juo = Juo {
-    height           :: Int,
-    width            :: Int,
+    cursorPos         :: (Int, Int),
+    documentPos       :: (Int, Int),
+    mult              :: String,
 
-    cursor           :: Cursor,
+    windowSize        :: IVec2,
 
-    currentDocument  :: Document,
-    documentPosition :: DocumentPosition
+    document          :: [DocumentLine],
+    documentType      :: FileType,
+    currentLineLength :: Int,
+    documentLength    :: Int,
+
+    mode              :: Mode,
+
+    messageBuf        :: String
 }
 
 data Direction = Up | Down | Left | Right
 
-data Cursor = Cursor {
-    y    :: IORef Int,
-    x    :: IORef Int,
-    mult :: IORef String
-}
+
+-- HSCurses abstraction
+write :: Int -> Int -> String -> IO ()
+write y x txt =
+    CUR.mvWAddStr CUR.stdScr y x txt
 
 updateCursor :: Juo -> IO ()
 updateCursor juo = do
-    y <- readIORef (y cur)
-    x <- readIORef (x cur)
+    let (y, x) = cursorPos juo
     CUR.move y x
 
+moveCursor :: Juo -> Direction -> Juo
+moveCursor juo dir =
+    let (y,x) = cursorPos juo
+        IVec2 winH winW = windowSize juo
+        (line, col) = documentPos juo
+        ls = document juo
+    in case dir of
+        Juo.Up ->
+            if y > 0
+                then
+                    let prevLine = line - 1
+                        nextLength = lineLength (ls !! prevLine)
+                        newX = if x > nextLength
+                               then max 0 (nextLength - 1)
+                               else x
+                    in juo { cursorPos = (y - 1, newX)
+                           , documentPos = (line - 1, newX)
+                           , currentLineLength = lineLength ((document juo) !! (line - 1))
+                           }
+                else juo
+
+        Juo.Down ->
+            if y + 1 < winH && line + 1 < length ls
+                then
+                    let nextLine = line + 1
+                        nextLength = lineLength (ls !! nextLine)
+                        newX = if x > nextLength
+                               then max 0 (nextLength - 1)
+                               else x
+                    in juo { cursorPos = (y + 1, newX)
+                           , documentPos = (line + 1, newX)
+                           , currentLineLength = lineLength ((document juo) !! (line + 1))
+                           }
+                else juo
+
+        Juo.Left ->
+            if x > 0
+                then juo { cursorPos = (y, x - 1)
+                         , documentPos = (line, col - 1)
+                         }
+                else juo
+
+        Juo.Right ->
+            let lineLen = lineLength (ls !! line)
+            in if x + 1 < winW && x + 1 < lineLen
+                  then juo { cursorPos = (y, x + 1)
+                           , documentPos = (line, col + 1)
+                           }
+                  else juo
+
+_getCurrentLine :: Juo -> IO Int
+_getCurrentLine juo = do 
+    pure (fst (documentPos juo))
+
+_getCurrentCol :: Juo -> IO Int
+_getCurrentCol juo = do 
+    pure (snd (documentPos juo))
+
+getMult :: Juo -> IO String
+getMult juo = do 
+    pure (mult juo)
+
+_getCurrentLineContent :: Juo -> IO String
+_getCurrentLineContent juo = do
+    let (line, _) = documentPos juo
+    pure $ lineContent (document juo !! line)
+
+_getLineLength :: Juo -> Int -> IO Int
+_getLineLength juo line = do
+    pure $ lineLength (document juo !! line)
+
+-- Generalized: apply a transformation to the line at cursor
+doAtCursor :: Juo -> (String -> Int -> String) -> Juo
+doAtCursor juo f =
+
+    let newContent = f content col
+        newLine = currLine 
+            { lineContent = newContent
+            , lineLength = (length newContent)
+            }
+
+        newLines = take line ls ++ [newLine] ++ drop (line + 1) ls
+
+        in juo { document = newLines
+            , documentLength = (length newLines)
+            }
+    
     where
-        cur = (cursor juo)
+        (line, col) = documentPos juo
+        ls = document juo
+        currLine = if null ls then (DocumentLine "" 0) else ls !! line
+        content = lineContent currLine
 
-moveCursor :: Juo -> Direction -> IO ()
-moveCursor juo Juo.Up = do
-    y' <- readIORef (y (cursor juo))
-    x' <- readIORef (x (cursor juo))
+deleteChar :: Juo -> Juo
+deleteChar juo = do 
+    doAtCursor juo' $ \content col ->
+        take col content ++ drop (col + 1) content
+    where
+        juo' = moveCursor juo Juo.Left
 
-    when (y' > 0) $ do
-        prevLineIndex <- readIORef (line (documentPosition juo))
+addChar :: Juo -> Char -> Juo
+addChar juo ch =
+    doAtCursor juo' $ \content col ->
+        take col content ++ [ch] ++ drop col content
+    where
+        juo' = moveCursor juo Juo.Right
 
-        
-        modifyIORef (line (documentPosition juo)) (subtract 1)
-        modifyIORef (y (cursor juo)) (subtract 1)
-
-        let nextLength = getLineLength juo (prevLineIndex - 1)
-
-        newPos <- 
-            if x' > nextLength 
-                then pure (nextLength + if nextLength /= 0 then 1 else 0)
-                else readIORef (x (cursor juo))
-            
-        writeIORef (x (cursor juo)) newPos
-
-moveCursor juo Juo.Down = do
-    y' <- readIORef (y (cursor juo))
-    x' <- readIORef (x (cursor juo))
-
-    when (y' + 1 < (height juo)) $ do
-        prevLineIndex <- readIORef (line (documentPosition juo))
-
-        modifyIORef (line (documentPosition juo)) (+ 1)
-        modifyIORef (y (cursor juo)) (+ 1)
-
-        let nextLength = getLineLength juo (prevLineIndex + 1)
-
-        newPos <- 
-            if x' > nextLength 
-                then pure (nextLength - if nextLength /= 0 then 1 else 0)
-                else readIORef (x (cursor juo))
-
-        writeIORef (x (cursor juo)) newPos
-
-moveCursor juo Juo.Left = do
-    x' <- readIORef (x (cursor juo))
-
-    if x' > 0 then do
-        modifyIORef (col (documentPosition juo)) (subtract 1)
-        modifyIORef (x (cursor juo)) (subtract 1)
-    else
-        return ()
-moveCursor juo Juo.Right = do
-    x' <- readIORef (x (cursor juo))
-    currentLineIndex' <- readIORef (line (documentPosition juo))
-
-    if x' + 1 < (width juo) && x' + 1 < getLineLength juo currentLineIndex' then do
-        modifyIORef (col (documentPosition juo)) (+ 1)
-        modifyIORef (x (cursor juo)) (+ 1)
-    else
-        return ()
-
-deleteAtCursor :: Juo -> IO ()
-deleteAtCursor juo =
-    return ()
-
--- Starts indexing at 1
-getLineLength :: Juo -> Int -> Int
-getLineLength juo it = 
-    (lineLength ((documentLines (currentDocument juo)) !! (it - 1)))
+appendChar :: Juo -> Char -> Juo
+appendChar juo ch =
+    doAtCursor juo' $ \content col ->
+        take col content ++ [ch] ++ drop col content
+    where
+        juo' = moveCursor juo Juo.Right
 
 
-updateMult :: Juo -> Char -> IO ()
+addCharToMessage :: Juo -> Char -> Juo
+addCharToMessage juo ch = juo { messageBuf = (messageBuf juo) ++ [ch] }
+
+updateMult :: Juo -> Char -> Juo
 updateMult juo ch =
-    modifyIORef (mult (cursor juo)) (++ [ch])
+   juo { mult = mult juo ++ [ch] }
 
---loopJuo (Juo (height juo) (width juo) ((modifier juo) ++ [ch]) (DocumentPosition pY pX)) pY pX content
+execCommand :: Juo -> Juo
+execCommand juo = do 
+    if True then do
+        let output = take 80 (Hasq.interpret (messageBuf juo))
+        juo { messageBuf = output, mode = Juo.Normal }
+    else
+        juo { messageBuf = "Command unavailable", mode = Juo.Normal }
 
-{-attemptToMove :: Juo -> Int -> Int -> IO ()
-attemptToMove juo y' x' = do
-    let s = Juo (height juo) (width juo) [] (DocumentPosition y x) in
-        loopJuo s y x content 
+saveFile :: Juo -> IO Juo
+saveFile juo = do
+    CUR.erase
+    write (winH - 1) 2 "File saved"
+    CUR.refresh
+
+    return juo
+
     where
-        isOnEndOfLine = 
-            if x' == endOfLine then 
-                True
-            else
-                False
-
-        x = 
-            if x' <= 0 then 0 
-            else if x' >= endOfLine then endOfLine
-            else x'
-        y = if y' <= 0 then 0 
-            else if y' >= (height juo) - 1 then (height juo) - 1
-            else y'-}
+        IVec2 winH winW = windowSize juo
