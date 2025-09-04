@@ -20,10 +20,11 @@ jobs:
     - name: Clone submodules
       run: git submodule update --init --recursive
       
-    - uses: actions/setup-haskell@v1
-      with:
-        ghc-version: '9.8.1'
-        cabal-version: '3.2'
+    - name: Install GHC
+      run: ghcup install ghc
+
+    - name: Install Cabal
+      run: ghcup install cabal
 
     - name: Cache
       uses: actions/cache@v3
