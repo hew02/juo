@@ -87,7 +87,9 @@ executable juo
                       hscurses, 
                       unix, 
                       ansi-terminal, 
-                      hasqtan
+                      hasqtan,
+                      process,
+                      readline
 
     -- Directories containing source files.
     hs-source-dirs:   src, src/lib-Juo, src/lib-Juo/Juo/

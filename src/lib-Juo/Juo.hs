@@ -12,20 +12,24 @@ module Juo (
     updateCursor, 
     updateMult,
     deleteChar,
-    addChar,
+    deleteCharBefore,
+    insertChar,
 
     getMult,
     saveFile,
-    addChar,
     addCharToMessage,
     write,
+    appendChar,
 
     execCommand
 ) where
 
 import qualified Hasqtan as Hasq
-
 import qualified UI.HSCurses.Curses as CUR
+import qualified UI.HSCurses.CursesHelper as CURHELP
+import System.Environment ( unsetEnv)
+import System.Process (callCommand)
+import Data.Char (isSpace)
 
 {-
     General Types.
@@ -38,7 +42,14 @@ data IVec2 = IVec2 Int Int
     deriving (Show, Eq)
 
 
-data FileType = Haskell | PlainText | Unknown String
+data FileType = Haskell | PlainText | Markdown | Unknown String
+
+instance Show FileType where
+     show Haskell         = "Haskell \xe777"
+     show PlainText       = "Plaintext \xf09a8"
+     show Markdown        = "Markdown \xeeab"
+     show (Unknown other) = other
+
 
 data Mode = Normal | Insert | Select | Command
     deriving (Eq)
@@ -84,10 +95,23 @@ write :: Int -> Int -> String -> IO ()
 write y x txt =
     CUR.mvWAddStr CUR.stdScr y x txt
 
+exitJuo :: IO ()
+exitJuo = do
+    CURHELP.end
+    callCommand "stty sane"
+    unsetEnv "ESCDELAY"
+
 updateCursor :: Juo -> IO ()
 updateCursor juo = do
     let (y, x) = cursorPos juo
+
+    {-if x > lineLen || currentMode /= Juo.Insert
+        then juo { cursorPos = (y, lineLen)
+                , documentPos = (line, lineLen)
+                }
+        else juo-}
     CUR.move y x
+    
 
 moveCursor :: Juo -> Direction -> Juo
 moveCursor juo dir =
@@ -131,13 +155,14 @@ moveCursor juo dir =
                          }
                 else juo
 
-        Juo.Right ->
+        Juo.Right -> do
             let lineLen = lineLength (ls !! line)
-            in if x + 1 < winW && x + 1 < lineLen
-                  then juo { cursorPos = (y, x + 1)
-                           , documentPos = (line, col + 1)
-                           }
-                  else juo
+                currentMode = (mode juo)
+            if x + 1 < winW && ((x + 1 < lineLen) || (currentMode == Juo.Insert && x < lineLen))
+                then juo { cursorPos = (y, x + 1)
+                        , documentPos = (line, col + 1)
+                        }
+                else juo
 
 _getCurrentLine :: Juo -> IO Int
 _getCurrentLine juo = do 
@@ -184,24 +209,32 @@ doAtCursor juo f =
 
 deleteChar :: Juo -> Juo
 deleteChar juo = do 
-    doAtCursor juo' $ \content col ->
-        take col content ++ drop (col + 1) content
-    where
-        juo' = moveCursor juo Juo.Left
+    let juo' = doAtCursor juo $ \content col -> take col content ++ drop (col + 1) content
+        (line, col) = documentPos juo
+        ls = document juo
+        currLine = if null ls then (DocumentLine "" 0) else ls !! line
 
-addChar :: Juo -> Char -> Juo
-addChar juo ch =
-    doAtCursor juo' $ \content col ->
-        take col content ++ [ch] ++ drop col content
-    where
-        juo' = moveCursor juo Juo.Right
+    if (col + 1) == (lineLength currLine) then moveCursor juo' Juo.Left else juo'
 
-appendChar :: Juo -> Char -> Juo
-appendChar juo ch =
-    doAtCursor juo' $ \content col ->
-        take col content ++ [ch] ++ drop col content
-    where
-        juo' = moveCursor juo Juo.Right
+-- TODO not needed
+deleteCharBefore :: Juo -> Juo
+deleteCharBefore juo = do 
+    let juo' = doAtCursor juo $ \content col -> take (col - 1) content ++ drop col content
+        (line, col) = documentPos juo
+        ls = document juo
+        currLine = if null ls then (DocumentLine "" 0) else ls !! line
+    moveCursor juo' Juo.Left
+
+insertChar :: Juo -> Char -> Juo
+insertChar juo ch =
+    let juo' = doAtCursor juo $ \content col -> 
+            take col content ++ [ch] ++ drop col content
+    in
+        moveCursor juo' Juo.Right
+
+appendChar :: Juo -> Juo
+appendChar juo =
+    moveCursor juo { mode = Juo.Insert } Juo.Right
 
 
 addCharToMessage :: Juo -> Char -> Juo
@@ -211,13 +244,34 @@ updateMult :: Juo -> Char -> Juo
 updateMult juo ch =
    juo { mult = mult juo ++ [ch] }
 
-execCommand :: Juo -> Juo
+removeSpaces :: String -> String
+removeSpaces str = filter (not . isSpace) str
+
+execCommand :: Juo -> (Juo, Bool)
 execCommand juo = do 
-    if True then do
-        let output = take 80 (Hasq.interpret (messageBuf juo))
-        juo { messageBuf = output, mode = Juo.Normal }
-    else
-        juo { messageBuf = "Command unavailable", mode = Juo.Normal }
+    let IVec2 _ w = windowSize juo
+    
+    -- NOTE temporary, expand the usage of Hasqtan
+        (isEditorCommand, shouldContinue) = 
+            case (removeSpaces (messageBuf juo)) of
+                "$q" -> (True, False)
+                "$exit" -> (True, False)
+                "$w" -> do
+
+                    --juo' <- Juo.saveFile juo
+
+                    (True, True)
+                _ -> (False, True)
+        
+        output = if not isEditorCommand 
+            then 
+                take w (Hasq.interpret (tail (messageBuf juo)))
+            else ""
+        juo' = juo { messageBuf = output
+                , mode = Juo.Normal
+                }
+
+    (juo', shouldContinue)
 
 saveFile :: Juo -> IO Juo
 saveFile juo = do
