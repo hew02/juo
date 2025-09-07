@@ -2,6 +2,8 @@ module Main (main) where
 
 import Juo
 import Juo.Settings
+import Juo.Draw
+import Juo.Util
 
 import qualified UI.HSCurses.Curses as CUR
 import qualified UI.HSCurses.CursesHelper as CURHELP
@@ -40,77 +42,53 @@ printArgs :: [String] -> IO ()
 printArgs [] = putStr "\n"
 printArgs (arg:args) = putStrLn arg
 
-
 openThisFile :: String -> IO ()
 openThisFile filename = do
     content <- readFile filename
     putStrLn $ content
 
-numDigit :: Integer -> Int
-numDigit = go 1 . abs
-    where
-        go ds n = if n >= 10 then go (ds + 1) (n `div` 10) else ds
-
-printFile :: Int -> Int -> Juo -> IO ()
-printFile y h juo = do
-    go y h (document juo)
-    where
-        go _ 0 _  = return ()
-        go _ _ [] = return ()
-        go row n (line:rest) = do
-            Juo.write row 0 ((lineContent line))
-            go (row + 1) (n - 1) rest
-
-writeRightSideInfo :: Juo -> IO ()
-writeRightSideInfo juo = do
-    (winH, winW) <- CUR.scrSize
-    let IVec2 winH winW = windowSize juo
-        fileTypeStr = show (documentType juo)
-        (l, c) = documentPos juo
-        lHeight = (winH - 2)
-    Juo.write lHeight (winW - (length fileTypeStr) - 2) fileTypeStr
-    
-    let colStr = show (c + 1)
-        lineStr = show (l + 1)
-
-
-    Juo.write lHeight (winW - (length fileTypeStr) - 3 - (length colStr)) colStr
-    Juo.write lHeight (winW - (length fileTypeStr) - 5 - (length colStr)) "|"
-    Juo.write lHeight (winW - (length fileTypeStr) - 6 - (length lineStr) - (length colStr)) lineStr
-
-writeMode :: Juo -> IO ()
-writeMode juo = do
-    let IVec2 winH winW = windowSize juo
-        modeStr = case (mode juo) of
-            Juo.Normal  -> ""
-            Juo.Insert  -> "Ins."
-            Juo.Select  -> "Sel."
-            Juo.Command -> "Cmd."
-    
-    CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 3))
-    Juo.write (winH - 2) 1 modeStr
-    CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 2))
-
-
-writeMessage :: Juo -> IO ()
-writeMessage juo = do
-    let IVec2 winH winW = windowSize juo
-    Juo.write (winH - 1) 1 (messageBuf juo)
-
-
+updateLastChar :: Juo -> Char -> Juo
+updateLastChar juo ch = juo { lastCharPressed = Just ch }
 
 startJuo :: Juo -> UserSettings -> IO ()
 startJuo juo settings = do
 
+    let dummyOffsetX = 3
+        offsetY = 2
+        
     (winH, winW) <- CUR.scrSize
+    editorWindow' <- CUR.newWin (winH - offsetY) (winW - dummyOffsetX) 0 dummyOffsetX
+    toolbarWindow' <- CUR.newWin 2 (winW + 1) (winH - 2) 0
+
+    --CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 1))
+
+    --let bkgrndColor  = CUR.attrPlus (CURHELP.ForegroundColor CURHELP.RedF) (CURHELP.BackgroundColor CURHELP.DarkBlueB)
+    --CUR.attrBoldOn
+
+    --let attr = CUR.setBold CUR.attr0 True
+
+    CUR.bkgrndSet CUR.attr0 (CUR.Pair 2)
+
+    CUR.keypad CUR.stdScr True
+    CUR.noDelay CUR.stdScr True
+    CUR.keypad editorWindow' True
+    CUR.noDelay editorWindow' True
+    CUR.keypad toolbarWindow' True
+    CUR.noDelay toolbarWindow' True
+
+    CUR.echo False
 
     let juo' = juo { cursorPos = (0, 0)
     , documentPos = (0, 0)
-    , windowSize = IVec2 winH winW
+    , window = CUR.stdScr
+    , editorWindow = editorWindow'
+    , toolbarWindow = toolbarWindow'
+    , windowSize = (winH, winW)
     , mult = []
     , currentLineLength = lineLength ((document juo) !! 0)
     , mode = Juo.Normal
     , messageBuf = ""
+    , fullMessageBuf = [DocumentLine "" 0]
     }
 
     loopJuo juo' settings
@@ -120,136 +98,167 @@ printInsertCursor = do
     putStr "\ESC[6 q"
     hFlush stdout
 
+
+printNormalCursor :: IO ()
+printNormalCursor = do
+    putStr "\ESC[0 q"
+    hFlush stdout
+
 loopJuo :: Juo -> UserSettings -> IO ()
 loopJuo juo settings = do
 
-    let IVec2 winH winW = windowSize juo
+    let (winH, winW) = windowSize juo
         (l, c) = documentPos juo
         (y, x) = cursorPos juo
 
-    CUR.erase -- clear curses's virtual screen but don't force a redraw
+    -- Main window
+    CUR.werase (window juo)
 
-    printFile 0 winH juo
-    
-    multString <- getMult juo
-    Juo.write (winH - 1) (winW - 8) multString
+    -- Editor window
+    CUR.werase (editorWindow juo)
+    case mode juo of
+        Juo.Insert  -> do
+            paintContent juo settings (document juo)
+            printInsertCursor
 
-    writeRightSideInfo juo
-    writeMode juo
-    writeMessage juo
+        Juo.Message -> paintContent juo settings (fullMessageBuf juo)
+        _           -> paintContent juo settings (document juo)
 
-    when ((mode juo) == Juo.Insert) printInsertCursor
-    
-
-    -- NOTE: Always update cursor last!
+    -- NOTE: Always update cursor *after* drawing
     updateCursor juo
-        
-    CUR.wRefresh CUR.stdScr -- copy the virtual screen to the terminal
-    
-    c <- CUR.getCh
 
+    CUR.werase (toolbarWindow juo)
+    drawToolbar juo settings
+
+    CUR.wnoutRefresh (window juo)
+    CUR.wnoutRefresh (toolbarWindow juo)
+    CUR.wnoutRefresh (editorWindow juo)
+
+    CUR.update
+
+    c <- CUR.getCh
     (juo', shouldContinue) <- case ((mode juo), c) of
 
 
 
         (_, CUR.KeyChar '\ESC') -> do
             CUR.cursSet CUR.CursorVisible
-            CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 2))
+            CUR.wAttrSet (editorWindow juo) (CUR.attr0, (CUR.Pair 2))
             putStrLn "\ESC[2 q"
             let juo' = case (mode juo) of
                     Juo.Normal  -> juo { mult = [] }
                     Juo.Command -> juo { messageBuf = "", mode = Juo.Normal }
                     Juo.Insert  -> do 
                         let juo' = juo { mode = Juo.Normal } in
-                            (moveCursor juo' Juo.Left)
+                            if (lastCharPressed juo) == Just 'a' 
+                                then
+                                    (moveCursor juo' Juo.Left)
+                                else 
+                                    juo'
                     _           -> juo { mode = Juo.Normal }
             return (juo', True)
 
         -- Called upon resize event
         (_, CUR.KeyResize) -> do
             (winH, winW) <- CUR.scrSize
-            let juo' = juo { windowSize = IVec2 winH winW }
+
+            let dummyOffsetX = 3
+                offsetY = 2
+            editorWindow' <- CUR.newWin (winH - offsetY) (winW - dummyOffsetX) 0 dummyOffsetX
+
+            let juo' = juo { windowSize = (winH, winW)
+            , editorWindow = editorWindow' }
             
             CUR.bkgrndSet CUR.attr0 (CUR.Pair 2)
 
             return (juo', True)
 
         -- NORMAL MODE BINDINGS
-        (Juo.Normal, CUR.KeyChar ch)
-            | ch == (delete settings) -> do
-                let juo' = deleteChar juo in
-                    return (juo', True)
+        (Juo.Normal, CUR.KeyChar ch) -> do
+            (juo', cont) <- case ch of 
+                _   | ch == (delete settings) -> do
+                        let juo' = deleteChar juo in
+                            return (juo', True)
 
-            | ch `elem` ['1'..'9'] ->
-                let juo' = updateMult juo ch in
-                return (juo', True)
+                    | ch `elem` ['1'..'9'] ->
+                        let juo' = updateMult juo ch in
+                        return (juo', True)
 
-            | ch == '0' ->
-                let juo' = juo { cursorPos = ((y),0)
-                , documentPos = (l, 0)
-                } in
-                    return (juo', True)
-            | ch == '$' ->
-                let newCol = if (currentLineLength juo) > 0
-                    then
-                        (currentLineLength juo) - 1
-                    else 0
-                    in
-                        let juo' = juo { cursorPos = ((y)
-                        , newCol)
-                        , documentPos = (l, newCol)
+                    | ch == '0' ->
+                        let juo' = juo { cursorPos = ((y),0)
+                        , documentPos = (l, 0)
+                        } in
+                            return (juo', True)
+                    | ch == '$' ->
+                        let newCol = if (currentLineLength juo) > 0
+                            then
+                                (currentLineLength juo) - 1
+                            else 0
+                            in
+                                let juo' = juo { cursorPos = ((y)
+                                , newCol)
+                                , documentPos = (l, newCol)
+                                } in
+                                    return (juo', True)
+
+                    -- NOTE SWITCH MODE
+                    | ch == 'i' -> do
+                        let juo' = juo { mode = Juo.Insert
                         } in
                             return (juo', True)
 
-            -- SWITCH MODE
-            | ch == 'i' -> do
-                let juo' = juo { mode = Juo.Insert
-                } in
-                    return (juo', True)
+                    | ch == 'a' -> return ((appendChar juo), True)
 
-            | ch == 'o' -> do
-                let juo' = moveCursor juo { mode = Juo.Insert
-                } Juo.Down in
-                    return (juo', True)
+                    | ch == 'o' -> return ((newLine juo), True)
 
-            | ch == 's' -> do
-                CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 3))
 
-                let juo' = juo { mode = Juo.Select
-                } in
-                    return (juo', True)
+                    | ch == 's' -> do
+                        CUR.wAttrSet (window juo) (CUR.attr0, (CUR.Pair 3))
 
-            | ch == ';' ->
-                let juo' = juo { mode = Juo.Command
-                , messageBuf = "$"
-                } in
-                    return (juo', True)
+                        let juo' = juo { mode = Juo.Select
+                        } in
+                            return (juo', True)
 
-            | ch == 'a' -> return ((appendChar juo), True)
 
-            -- NORMAL MODE SHORTCUTS
-            | ch == 'r' -> do
-                let juo' = juo { mode = Juo.Normal
-                } in
-                    return (juo', True)
+                    | ch == 'm' -> do
+                        let juo' = juo { mode = Juo.Message
+                        } in
+                            return (juo', True)
 
-            | ch == (up settings) ->
-                let juo' = moveCursor juo Juo.Up in
-                    return (juo', True)
-            | ch == down settings ->
-                let juo' = moveCursor juo Juo.Down in
-                    return (juo', True)
-            | ch == (left settings) -> 
-                let juo' = moveCursor juo Juo.Left in
-                    return (juo', True)
-            | ch == (right settings) -> 
-                let juo' = moveCursor juo Juo.Right in
-                    return (juo', True)
 
-        -- SELECT MODE BINDINGS
+                    | ch == ';' ->
+                        let juo' = juo { mode = Juo.Command
+                        , messageBuf = ""
+                        } in
+                            return (juo', True)
+
+                    
+                    -- NOTE NORMAL MODE SHORTCUTS
+                    | ch == 'r' -> do
+                        let juo' = juo { mode = Juo.Normal
+                        } in
+                            return (juo', True)
+
+                    | ch == (up settings) ->
+                        let juo' = moveCursor juo Juo.Up in
+                            return (juo', True)
+                    | ch == down settings ->
+                        let juo' = moveCursor juo Juo.Down in
+                            return (juo', True)
+                    | ch == (left settings) -> 
+                        let juo' = moveCursor juo Juo.Left in
+                            return (juo', True)
+                    | ch == (right settings) -> 
+                        let juo' = moveCursor juo Juo.Right in
+                            return (juo', True)
+                    
+                    | otherwise -> return (juo, True)
+            return (updateLastChar juo' ch, cont)
+
+        -- NOTE SELECT MODE BINDINGS
         (Juo.Select, _) -> return (juo, True)
                 
-        -- INSERT MODE BINDINGS
+        -- NOTE INSERT MODE BINDINGS
         (Juo.Insert, CUR.KeyChar ch)
             -- TODO This needs to be implemented properly
             | ch == '\n' || ch == '\r' -> do
@@ -268,10 +277,11 @@ loopJuo juo settings = do
                 let juo' = Juo.insertChar juo ch 
                 return (juo', True)
 
-        -- COMMAND MODE BINDINGS
+        -- NOTE COMMAND MODE BINDINGS
         (Juo.Command, CUR.KeyChar ch)
             | ch == '\n' || ch == '\r' -> do
-                return (execCommand juo)
+                (juo', shouldContinue) <- execCommand juo
+                return (juo', shouldContinue)
 
         (Juo.Command, CUR.KeyChar ch)
             | isPrint ch -> do
@@ -282,15 +292,13 @@ loopJuo juo settings = do
 
         (Juo.Command, CUR.KeyBackspace) -> do
             let juo' = juo { 
-                messageBuf = if length (messageBuf juo) > 1 then (init (messageBuf juo)) else "$"
+                messageBuf = if null (messageBuf juo) then "" else (init (messageBuf juo))
             } in
                 return (juo', True)
 
         (Juo.Normal, _) -> return (juo, True)
 
         _ -> return (juo, False)
-
-    CUR.update
     
     when shouldContinue (loopJuo juo' settings)
         
@@ -310,12 +318,6 @@ loopJuo juo settings = do
             else read (modifier juo)-}
 -}
 
-getScreenSize :: IO IVec2
-getScreenSize = do
-    (y, x) <- CUR.scrSize
-    return (IVec2 y x)
-
-
 _parseLine :: [String] -> [DocumentLine]
 _parseLine = map (\l -> DocumentLine l (length l))
 
@@ -334,6 +336,7 @@ parseDocument filename text =
         { document       = ds
         , documentLength = length ds
         , documentType   = fileType
+        , filePath       = filename
         }
 
 newColor :: CUR.Color -> (Int, Int, Int) -> IO ()
@@ -374,6 +377,7 @@ main = do
 
             --CUR.initCurses
             CURHELP.start
+            printNormalCursor
             has256Color <- CUR.hasColors
 
             if not has256Color then do
@@ -390,29 +394,19 @@ main = do
 
                 newColor (CUR.Color 44) (57, 255, 20)
 
-                newColor (CUR.Color 69) (12, 12, 12)
+                newColor (CUR.Color 69) (18, 18, 18)
+                newColor (CUR.Color 72) (12, 12, 12)
+
 
                 CUR.initPair (CUR.Pair 4) CURHELP.white CURHELP.blue
 
                 CUR.initPair (CUR.Pair 2) (CUR.Color 33) (CUR.Color 69)
 
                 -- Mode 
-                CUR.initPair (CUR.Pair 3) (CUR.Color 44) (CUR.Color 69)
+                CUR.initPair (CUR.Pair 3) (CUR.Color 69) (CUR.Color 44)
 
-
-
-                --CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 1))
-
-                --let bkgrndColor  = CUR.attrPlus (CURHELP.ForegroundColor CURHELP.RedF) (CURHELP.BackgroundColor CURHELP.DarkBlueB)
-                --CUR.attrBoldOn
-
-                let attr = CUR.setBold CUR.attr0 True
-
-                CUR.bkgrndSet CUR.attr0 (CUR.Pair 2)
-
-                CUR.keypad CUR.stdScr True
-                CUR.noDelay CUR.stdScr True
-                CUR.echo False
+                -- Toolbar
+                CUR.initPair (CUR.Pair 5) (CUR.Color 33) (CUR.Color 72)
 
 
                 let filename = head args
@@ -450,5 +444,9 @@ main = do
                 down = 'j',
                 left = 'h',
                 right = 'l',
-                delete = 'x'
+                delete = 'x',
+
+                cursorCmd = '𝒥',
+                
+                showLineNumbers = False
             }

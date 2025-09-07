@@ -7,5 +7,7 @@ data UserSettings = UserSettings {
     right  :: Char,
     delete :: Char,
 
+    cursorCmd :: Char,
+
     showLineNumbers :: Bool
 }

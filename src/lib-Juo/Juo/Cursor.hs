@@ -1,3 +1,7 @@
+{-
+DEPRECATED
+-}
+
 module Juo.Cursor (Cursor(..), moveCursor, updateCursor, Direction(..)) where
 
 import Juo
