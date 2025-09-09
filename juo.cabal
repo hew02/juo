@@ -74,7 +74,7 @@ executable juo
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    other-modules:    Juo, Juo.Settings, Juo.Draw, Juo.Util
+    other-modules:    Juo, Juo.Config, Juo.Draw, Juo.Util
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -88,8 +88,7 @@ executable juo
                       unix, 
                       ansi-terminal, 
                       hasqtan,
-                      process,
-                      readline
+                      process
 
     -- Directories containing source files.
     hs-source-dirs:   src, src/lib-Juo, src/lib-Juo/Juo/

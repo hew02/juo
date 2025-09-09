@@ -20,6 +20,8 @@ module Juo (
     newLine,
     newLinePush,
 
+    insertTab,
+
     getMult,
     saveFile,
     addCharToMessage,
@@ -36,6 +38,7 @@ import System.Process (callCommand)
 import System.IO
 import Control.Exception (try, IOException)
 import Data.Char (isSpace)
+import Control.Monad (when)
 
 {- | Juo's builtin file types.
 
@@ -45,12 +48,26 @@ __Examples:__
 c = 'Unknown' \"C\"
 @
 -}
-data FileType = Haskell | PlainText | Markdown | Unknown String
+data FileType 
+    = Haskell 
+    | PlainText 
+    | Markdown 
+    | C
+    | Cpp
+    | Hasqtan
+    | Java
+    | OCaml
+    | Unknown String
 
 instance Show FileType where
-     show Haskell         = "\xe777 Haskell"
-     show PlainText       = "\xf09a8 Text"
-     show Markdown        = "\xeeab Markdown"
+     show Haskell         = "Haskell"
+     show PlainText       = "Text"
+     show Markdown        = "Markdown"
+     show C               = "C"
+     show Cpp             = "C++"
+     show Hasqtan         = "Hasqtan"
+     show Java            = "Java"
+     show OCaml           = "OCaml"
      show (Unknown other) = other
 
 {- | Possible modes for Juo.
@@ -64,10 +81,10 @@ data Mode = Normal | Insert | Select | Command | Message
 
 instance Show Mode where
     show Normal  = ""
-    show Insert  = " Ins. "
-    show Select  = " Sel. "
-    show Command = " Cmd. "
-    show Message = " Msg. "
+    show Insert  = " INS "
+    show Select  = " SEL "
+    show Command = " CMD "
+    show Message = " MSG "
 
 data Action = Inserted | Deleted
     deriving (Eq)
@@ -91,12 +108,13 @@ mvCursor :: Window -> Int -> Int -> IO ()
 mvCursor Window{..} y x =
     CUR.wMove win y x
 
-
 data Juo = Juo {
 
     cursorPos         :: (Int, Int),
 
     documentPos       :: (Int, Int),
+    {-line              :: Int,
+    col               :: Int,-}
 
     mult              :: String,
     shortcutBuf       :: String,
@@ -118,7 +136,9 @@ data Juo = Juo {
     mode              :: Mode,
 
     messageBuf        :: String,
-    fullMessageBuf    :: [DocumentLine]
+    fullMessageBuf    :: [DocumentLine],
+
+    topOffset         :: Int
 }
 
 data Direction = Up | Down | Left | Right
@@ -133,55 +153,81 @@ updateCursor :: Juo -> IO ()
 updateCursor Juo{..} = do
     let currLine = if null document then (DocumentLine "" 0) else document !! l
         currLen = lineLength currLine
+        (_, c) = documentPos
+        currChar = (lineContent currLine) !! c
+        numOfTabsBefore = 
+            length $ filter (== '\t') (take (c + 1) (lineContent currLine))
 
     {-if x > lineLen || currentMode /= Juo.Insert
         then juo { cursorPos = (y, lineLen)
                 , documentPos = (line, lineLen)
                 }
         else juo-}
+    
+
     if x /= 0 && x >= currLen && mode /= Juo.Insert
         then
             mvCursor editorWindow y (currLen - 1)
         else
             mvCursor editorWindow y x
+
+    -- Move based on # of tabs
+    mvCursor editorWindow y (x + (numOfTabsBefore * 3))
+
     where
         (y, x) = cursorPos
         (l, c) = documentPos
 
-moveCursor :: Juo -> Direction -> Juo
-moveCursor juo dir =
-    let (y,x) = cursorPos juo
-        (winH, winW) = windowSize juo
+moveCursor :: Juo -> Direction -> Int -> Juo
+moveCursor juo dir dist =
+    let (y, x) = cursorPos juo
+        (winH, winW) = size (editorWindow juo)
         (line, col) = documentPos juo
         ls = document juo
     in case dir of
-        Juo.Up ->
-            if y > 0
-                then
-                    let prevLine = line - 1
-                        nextLength = lineLength (ls !! prevLine)
-                        newX = if x > nextLength
-                               then max 0 (nextLength - 1)
-                               else x
-                    in juo { cursorPos = (y - 1, newX)
-                           , documentPos = (line - 1, newX)
-                           , currentLineLength = lineLength ((document juo) !! (line - 1))
-                           }
-                else juo
+        Juo.Up
+            | y > 0 ->
+                let prevLine = line - 1
+                    nextLength = lineLength (ls !! prevLine)
+                    newX = if x > nextLength
+                           then max 0 (nextLength - 1)
+                           else x
+                in juo { cursorPos = (y - 1, newX)
+                       , documentPos = (line - 1, newX)
+                       , currentLineLength = lineLength ((document juo) !! (line - 1))
+                       }
+            | y == 0 && line > 0 -> do
+                let prevLine = line - 1
+                    nextLength = lineLength (ls !! prevLine)
+                    x' = if x > nextLength
+                           then max 0 (nextLength - 1)
+                           else x
+                juo { documentPos = (line - 1, x')
+                , topOffset = (topOffset juo) - 1
+                }
+            | otherwise -> juo
 
-        Juo.Down ->
-            if y + 1 < winH && line + 1 < (length ls)
-                then
-                    let nextLine = line + 1
-                        nextLength = lineLength (ls !! nextLine)
-                        newX = if x > nextLength
-                               then max 0 (nextLength - 1)
-                               else x
-                    in juo { cursorPos = (y + 1, newX)
-                           , documentPos = (line + 1, newX)
-                           , currentLineLength = lineLength ((document juo) !! (line + 1))
-                           }
-                else juo
+        Juo.Down
+            | y + 1 < winH && line + 1 < (length ls) ->
+                let nextLine = line + 1
+                    nextLength = lineLength (ls !! nextLine)
+                    newX = if x > nextLength
+                           then max 0 (nextLength - 1)
+                           else x
+                in juo { cursorPos = (y + 1, newX)
+                       , documentPos = (line + 1, newX)
+                       , currentLineLength = lineLength ((document juo) !! (line + 1))
+                       }
+            | y + 1 == winH && line + 1 < (length ls) -> do
+                let nextLine = line + 1
+                    nextLength = lineLength (ls !! nextLine)
+                    x' = if x > nextLength
+                           then max 0 (nextLength - 1)
+                           else x
+                juo { documentPos = (line + 1, x')
+                , topOffset = (topOffset juo) + 1
+                }
+            | otherwise -> juo
 
         Juo.Left ->
             if x > 0
@@ -269,7 +315,7 @@ deleteChar juo = do
         ls = document juo
     if (col + 1) == (lineLength currLine) 
         then 
-            moveCursor juo' Juo.Left 
+            moveCursor juo' Juo.Left 1
         else juo'
 
 newLine :: Juo -> Juo
@@ -283,7 +329,7 @@ newLine juo = do
         in moveCursor juo { document = newLines
             , documentLength = (length newLines)
             , mode = Juo.Insert
-            } Juo.Down
+            } Juo.Down 1
 
     where
         (line, _) = documentPos juo
@@ -323,7 +369,7 @@ deleteLine juo = do
 
     if line == (documentLength _juo)
         then 
-            (moveCursor _juo Juo.Up)
+            (moveCursor _juo Juo.Up 1)
         else
             _juo
 
@@ -341,19 +387,25 @@ deleteCharBefore juo = do
         (line, col) = documentPos juo
         ls = document juo
         currLine = if null ls then (DocumentLine "" 0) else ls !! line
-    moveCursor juo' Juo.Left
+    moveCursor juo' Juo.Left 1
 
 insertChar :: Juo -> Char -> Juo
 insertChar juo ch =
     let juo' = doAtCursor juo Inserted $ \content col -> 
             take col content ++ [ch] ++ drop col content
     in
-        moveCursor juo' Juo.Right
+        moveCursor juo' Juo.Right 1
 
+insertTab :: Juo -> Juo
+insertTab juo =
+    let juo' = doAtCursor juo Inserted $ \content col -> 
+            take col content ++ (replicate 4 ' ') ++ drop col content
+    in
+        moveCursor juo' Juo.Right 1
 
 appendChar :: Juo -> Juo
 appendChar juo =
-    moveCursor juo { mode = Juo.Insert } Juo.Right
+    moveCursor juo { mode = Juo.Insert } Juo.Right 1
 
 
 addCharToMessage :: Juo -> Char -> Juo
@@ -386,13 +438,17 @@ execCommand juo = do
                 }
             return (juo', True)
         _      ->  do
-            let output = take winW (Hasq.interpret (messageBuf juo))
+            let output = take winW (Hasq.interp (messageBuf juo))
                 juo'   = juo { messageBuf = output
                 , mode = Juo.Normal 
                 }
             return (juo', True)
 
 
+getFileSize :: Juo -> Int
+getFileSize Juo{..} = sum (map len document)
+    where
+        len docLine = (lineLength docLine) + 1 -- Add 1 for '\n'
 
 saveFile :: Juo -> IO Juo
 saveFile juo = do
@@ -401,8 +457,9 @@ saveFile juo = do
            :: IO (Either IOException ())
 
     let buf = case res of
-            Prelude.Left _  -> "File busy, failed to save."
-            Prelude.Right _ -> "File saved!"
+            Prelude.Left _  -> (show (filePath juo) ++ show (getFileSize juo) ++ "B failed to write")
+            Prelude.Right _ -> do
+                (show (filePath juo) ++ " " ++ show (documentLength juo) ++ "L, " ++ show (getFileSize juo) ++ "B written")
 
 
     return juo { messageBuf = buf
