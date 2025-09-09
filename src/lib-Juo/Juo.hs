@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
+
 module Juo ( 
     Juo(..),
     Direction(..),
@@ -6,13 +8,17 @@ module Juo (
     FileType(..),
     Mode(..),
 
+    Window(..),
+
     moveCursor, 
     updateCursor, 
     updateMult,
     deleteChar,
+    deleteLine,
     deleteCharBefore,
     insertChar,
     newLine,
+    newLinePush,
 
     getMult,
     saveFile,
@@ -31,7 +37,14 @@ import System.IO
 import Control.Exception (try, IOException)
 import Data.Char (isSpace)
 
+{- | Juo's builtin file types.
 
+__Examples:__
+
+@
+c = 'Unknown' \"C\"
+@
+-}
 data FileType = Haskell | PlainText | Markdown | Unknown String
 
 instance Show FileType where
@@ -40,7 +53,12 @@ instance Show FileType where
      show Markdown        = "\xeeab Markdown"
      show (Unknown other) = other
 
+{- | Possible modes for Juo.
 
+__Note:__
+
+Will most likely remove 'Message' when buffers are introduced.
+-}
 data Mode = Normal | Insert | Select | Command | Message
     deriving (Eq)
 
@@ -64,17 +82,29 @@ data DocumentLine = DocumentLine {
     lineLength  :: Int
 }
 
+data Window = Window {
+    win    :: CUR.Window,
+    size   :: (Int, Int)
+}
+
+mvCursor :: Window -> Int -> Int -> IO ()
+mvCursor Window{..} y x =
+    CUR.wMove win y x
+
+
 data Juo = Juo {
 
     cursorPos         :: (Int, Int),
 
     documentPos       :: (Int, Int),
+
     mult              :: String,
+    shortcutBuf       :: String,
+
     lastCharPressed   :: Maybe Char,
 
-    window            :: CUR.Window,
-    editorWindow      :: CUR.Window,
-    toolbarWindow     :: CUR.Window,
+    editorWindow      :: Juo.Window,
+    toolbarWindow     :: Juo.Window,
 
     windowSize        :: (Int, Int),
 
@@ -83,6 +113,7 @@ data Juo = Juo {
     currentLineLength :: Int,
     documentLength    :: Int,
     filePath          :: String,
+    editedDocument    :: Bool,
 
     mode              :: Mode,
 
@@ -99,15 +130,23 @@ exitJuo = do
     unsetEnv "ESCDELAY"
 
 updateCursor :: Juo -> IO ()
-updateCursor juo = do
-    let (y, x) = cursorPos juo
+updateCursor Juo{..} = do
+    let currLine = if null document then (DocumentLine "" 0) else document !! l
+        currLen = lineLength currLine
 
     {-if x > lineLen || currentMode /= Juo.Insert
         then juo { cursorPos = (y, lineLen)
                 , documentPos = (line, lineLen)
                 }
         else juo-}
-    CUR.wMove (editorWindow juo) y x
+    if x /= 0 && x >= currLen && mode /= Juo.Insert
+        then
+            mvCursor editorWindow y (currLen - 1)
+        else
+            mvCursor editorWindow y x
+    where
+        (y, x) = cursorPos
+        (l, c) = documentPos
 
 moveCursor :: Juo -> Direction -> Juo
 moveCursor juo dir =
@@ -131,7 +170,7 @@ moveCursor juo dir =
                 else juo
 
         Juo.Down ->
-            if y + 1 < winH && line + 1 < length ls
+            if y + 1 < winH && line + 1 < (length ls)
                 then
                     let nextLine = line + 1
                         nextLength = lineLength (ls !! nextLine)
@@ -220,12 +259,13 @@ doAtCursor juo action f =
         newMessages = (fullMessageBuf juo) ++ [DocumentLine newMessage (length newMessage)]
 
 deleteChar :: Juo -> Juo
-deleteChar juo = do 
-    let juo' = doAtCursor juo Deleted $ \content col -> 
+deleteChar juo = do
+    let (line, col) = documentPos juo
+        currLine = if null ls then (DocumentLine "" 0) else ls !! line
+        juo' = doAtCursor juo Deleted $ \content col -> 
             take col content ++ drop (col + 1) content
 
-        (line, col) = documentPos juo
-        currLine = if null ls then (DocumentLine "" 0) else ls !! line
+
         ls = document juo
     if (col + 1) == (lineLength currLine) 
         then 
@@ -235,8 +275,7 @@ deleteChar juo = do
 newLine :: Juo -> Juo
 newLine juo = do
     let juo' = juo { mode = Juo.Insert }
-        newLine = currLine 
-            { lineContent = ""
+        newLine = DocumentLine { lineContent = ""
             , lineLength = 0
             }
         newLines = take (line + 1) ls ++ [newLine] ++ drop (line + 1) ls
@@ -247,10 +286,51 @@ newLine juo = do
             } Juo.Down
 
     where
+        (line, _) = documentPos juo
+        ls = document juo
+
+newLinePush :: Juo -> Juo
+newLinePush juo = do
+    let juo' = juo { mode = Juo.Insert }
+        oldContent = take col (lineContent currLine)
+        newContent = drop col (lineContent currLine)
+        oldLine = DocumentLine { lineContent = oldContent
+        , lineLength = length oldContent
+        } 
+        newLine = DocumentLine { lineContent = newContent
+        , lineLength = length newContent
+        }
+        newLines = take line ls ++ [oldLine] ++ [newLine] ++ drop (line + 1) ls
+
+        in juo { document = newLines
+            , documentLength = (length newLines)
+            , mode = Juo.Insert
+            , cursorPos = (y, 0)
+            }
+
+    where
+        (y, x) = cursorPos juo
         (line, col) = documentPos juo
         ls = document juo
         currLine = if null ls then (DocumentLine "" 0) else ls !! line
 
+deleteLine :: Juo -> Juo
+deleteLine juo = do
+    let newLines = take line ls ++ drop (line + 1) ls
+        _juo = juo { document = newLines
+            , documentLength = (length newLines)
+            }
+
+    if line == (documentLength _juo)
+        then 
+            (moveCursor _juo Juo.Up)
+        else
+            _juo
+
+    where
+        (line, _) = documentPos juo
+        ls = document juo
+        currLine = if null ls then (DocumentLine "" 0) else ls !! line 
 
 -- TODO not needed
 deleteCharBefore :: Juo -> Juo
