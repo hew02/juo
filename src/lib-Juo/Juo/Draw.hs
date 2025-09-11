@@ -40,7 +40,6 @@ drawLine win conf row col ('\t':content) = do
 drawLine win conf row col (c:content) = do
     drawCh win row col c
     drawLine win conf row (col + 1) content
-            
 
 paintContent :: Juo -> Config -> [DocumentLine] -> IO ()
 paintContent Juo{..} conf buf = do
@@ -48,7 +47,8 @@ paintContent Juo{..} conf buf = do
     go 0 winH (drop topOffset buf)
     where
         (winH, _) = windowSize
-        
+        (_, winW) = size editorWindow
+    
         go _ 2 _  = return ()
         go row n [] = do
             CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 8))

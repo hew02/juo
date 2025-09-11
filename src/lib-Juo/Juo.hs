@@ -27,7 +27,9 @@ module Juo (
     addCharToMessage,
     appendChar,
 
-    execCommand
+    execCommand,
+
+    exitJuo
 ) where
 
 import qualified Hasqtan as Hasq
@@ -145,6 +147,7 @@ data Direction = Up | Down | Left | Right
 
 exitJuo :: IO ()
 exitJuo = do
+    --CUR.endWin
     CURHELP.end
     callCommand "stty sane"
     unsetEnv "ESCDELAY"

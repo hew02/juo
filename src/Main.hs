@@ -5,6 +5,8 @@ import Juo.Config
 import Juo.Draw
 import Juo.Util
 
+import Brick
+
 import qualified UI.HSCurses.Curses as CUR
 import qualified UI.HSCurses.CursesHelper as CURHELP
 --import System.IO
@@ -18,6 +20,8 @@ import Control.Concurrent
 import Data.Char
 --import System.Console.ANSI
 import Control.Monad (when)
+import Control.Exception (try, IOException)
+import System.IO (readFile)
 
 type FileName = String
 type FullText = String
@@ -52,7 +56,7 @@ updateLastChar juo ch = juo { lastCharPressed = Just ch }
 startJuo :: Juo -> Config -> IO ()
 startJuo juo settings = do
 
-    let dummyOffsetX = 3
+    let dummyOffsetX = 2
         offsetY = 2
         
     (winH, winW) <- CUR.scrSize
@@ -74,7 +78,7 @@ startJuo juo settings = do
 
     --let attr = CUR.setBold CUR.attr0 True
 
-    CUR.bkgrndSet CUR.attr0 (CUR.Pair 2)
+    CUR.bkgrndSet CUR.attr0 (CUR.Pair 8)
 
     CUR.keypad CUR.stdScr True
     CUR.noDelay CUR.stdScr True
@@ -129,6 +133,9 @@ resizeEditor juo = do
     CUR.wRefresh CUR.stdScr
     CUR.wRefresh (win _editorWindow)
     CUR.wRefresh (win _toolbarWindow)
+
+    --CUR.wbkgd (win _editorWindow) (CUR.ChType ' ' (CUR.attr0, CUR.Pair 2))
+
 
     let _juo = juo { windowSize = (winH, winW)
     , editorWindow = _editorWindow
@@ -487,20 +494,18 @@ main = do
                 -- Toolbar
                 CUR.initPair (CUR.Pair 5) (CUR.Color 33) (CUR.Color 72)
 
-
                 let filename = head args
-                text <- readFile filename
+
+                res <- try (readFile filename) :: IO (Either IOException String)
+
+                let content = case res of
+                        Prelude.Left _  -> "" -- Creating a new file!
+                        Prelude.Right text -> text
+
+                startJuo (parseDocument filename content) settings
 
 
-                startJuo (parseDocument filename text) settings
-
-
-            
-
-            --CUR.endWin
-            CURHELP.end
-            callCommand "stty sane"
-            unsetEnv "ESCDELAY"
+            exitJuo
 
 
     --isFile <- doesFileExist $ head args
