@@ -97,7 +97,9 @@ drawToolbar Juo {..} settings = do
   setColor toolbarWindow Background
   draw toolbarWindow 1 0 (replicate (winW - 1) ' ')
   draw toolbarWindow 1 1 messageBuf
-  draw toolbarWindow 1 (winW - maxMultLen) (take (maxMultLen - 1) mult)
+  draw toolbarWindow 1 (winW - maxMultLen - length multBuf  - length commandBuf) (take (maxMultLen - 1) multBuf)
+  draw toolbarWindow 1 (winW - maxMultLen - length commandBuf) (take (maxMultLen - 1) commandBuf)
+
 
   -- Command buffer
   when (mode == Juo.Command) (draw toolbarWindow 1 0 [cursorCmd settings])

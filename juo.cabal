@@ -68,7 +68,6 @@ executable juo
     -- Other library packages from which modules are imported.
     build-depends:    directory ^>=1.3.8.5, 
                       base ^>=4.18.3.0, 
-                      brick, 
                       filepath, 
                       hscurses, 
                       unix, 

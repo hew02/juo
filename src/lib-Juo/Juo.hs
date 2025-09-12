@@ -13,7 +13,6 @@ module Juo
     FileDetails(..),
     moveCursor,
     updateCursor,
-    updateMult,
     deleteChar,
     deleteLine,
     deleteCharBefore,
@@ -21,7 +20,6 @@ module Juo
     newLine,
     newLinePush,
     insertTab,
-    getMult,
     saveFile,
     addCharToMessage,
     appendChar,
@@ -91,7 +89,7 @@ instance Show Mode where
   show Normal = ""
   show Insert = " INS "
   show Select = " SEL "
-  show Command = " CMD "
+  show Command = " EX "
   show Message = " MSG "
 
 data Action = Inserted | Deleted
@@ -159,8 +157,9 @@ data Juo = Juo
     dy :: Int,
     dx :: Int,
 
-    mult :: String,
-    shortcutBuf :: String,
+    multBuf :: String, -- Tracks numbers
+    commandBuf :: String, -- Tracks letter commands
+
     lastCharPressed :: Maybe HC.Key,
     editorWindow :: Juo.Window,
     toolbarWindow :: Juo.Window,
@@ -240,8 +239,8 @@ newJuo maybeFile = do
     editorWindow = _editorWindow,
     toolbarWindow = _toolbarWindow,
     windowSize = (winH, winW),
-    mult = "",
-    shortcutBuf = "",
+    multBuf = "",
+    commandBuf = "",
     mode = Juo.Normal,
     messageBuf = "",
     fullMessageBuf = [DocumentLine "" 0],
@@ -419,10 +418,6 @@ moveCursorOnce juo dir =
               }
           | otherwise -> juo
 
-getMult :: Juo -> IO String
-getMult juo = do
-  pure (mult juo)
-
 findDiff :: String -> String -> [(Char, Char, Int)]
 findDiff s1 s2 =
   [ (c1, c2, i)
@@ -591,10 +586,6 @@ appendChar juo =
 addCharToMessage :: Juo -> Char -> Juo
 addCharToMessage juo ch = juo {messageBuf = messageBuf juo ++ [ch]}
 
-updateMult :: Juo -> Char -> Juo
-updateMult juo ch =
-  juo {mult = mult juo ++ [ch]}
-
 execCommand :: Juo -> IO (Juo, Bool)
 execCommand juo = do
   let (_, winW) = windowSize juo
@@ -699,27 +690,37 @@ handleNormalMode :: Juo -> Config -> HC.Key -> IO (Juo, Bool)
 handleNormalMode juo conf ch = do
   let l = dy juo
       c = dx juo
+      mult = if null (multBuf juo) then 1 else read (multBuf juo)
 
   case ch of
     HC.KeyChar c
+
       | c == (delete conf) -> do
           let _juo = deleteChar juo
           return (_juo, True)
-      | c `elem` ['1' .. '9'] -> do
-          let _juo = updateMult juo c
-          return (_juo, True)
+
+      | c `elem` ['1' .. '9'] -> do return (juo { multBuf = multBuf juo ++ [c]}, True)
 
       -- HACK: Really lazy on my part :(
-      | c == '0' -> return ((moveCursor juo Juo.Left 999999), True)
+      | c == '0' -> 
+        if null (multBuf juo) 
+          then
+            return ((moveCursor juo Juo.Left 999999), True)
+          else
+            return (juo { multBuf = multBuf juo ++ [c]}, True)
       | c == '$' -> return ((moveCursor juo Juo.Right 999999), True)
 
       | c == 'G' -> return ((moveCursor juo Juo.Down 999999), True)
 
       | c `elem` ['d', 'g'] -> do 
-        return (juo {mult = mult juo ++ [c]}, True)
-        
- 
+        case c of
+          'd' -> 
+            setUnderscoreCursor
+          _ ->
+            setBlockCursor
 
+        return (juo {commandBuf = commandBuf juo ++ [c]}, True)
+        
       -- NOTE: SWITCH MODE
       | c == 'i' -> do
           let _juo =
@@ -743,13 +744,19 @@ handleNormalMode juo conf ch = do
                   { mode = Juo.Message
                   }
           return (_juo, True)
-      | c == ';' -> do
-          let _juo =
-                juo
+      
+      | c == ':' -> do
+          return (juo
                   { mode = Juo.Command,
                     messageBuf = ""
-                  }
-          return (_juo, True)
+                  }, 
+                  True)
+      | c == ';' -> do
+          return (juo
+                  { mode = Juo.Command,
+                    messageBuf = ""
+                  }, 
+                  True)
 
       -- NOTE: NORMAL MODE SHORTCUTS
 
@@ -759,10 +766,15 @@ handleNormalMode juo conf ch = do
                   { mode = Juo.Normal
                   }
           return (_juo, True)
-      | c == (up conf) -> return ((moveCursor juo Juo.Up 1), True)
-      | c == down conf -> return ((moveCursor juo Juo.Down 1), True)
-      | c == (left conf) -> return ((moveCursor juo Juo.Left 1), True)
-      | c == (right conf) -> return ((moveCursor juo Juo.Right 1), True)
+      -- TODO Could add these to command buffer but doesnt seem to be necessary
+      | c == (up conf) ->
+        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Up mult), True)
+      | c == down conf -> 
+        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Down mult), True)
+      | c == (left conf) -> 
+        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Left mult), True)
+      | c == (right conf) -> 
+        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Right mult), True)
 
       | otherwise -> return (insertNewMessage juo (keyboardCharErrMsg c), True)
 

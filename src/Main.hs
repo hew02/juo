@@ -104,8 +104,6 @@ loopJuo :: Juo -> Config -> IO ()
 loopJuo juo conf = do
   let l = dy juo
 
-  _ <- CUR.cursSet CUR.CursorInvisible
-
   -- Main window
   CUR.werase CUR.stdScr
 
@@ -130,8 +128,6 @@ loopJuo juo conf = do
 
   CUR.update
 
-  CUR.cursSet CUR.CursorVisible
-
   c <- CUR.getCh
 
   (juo, shouldContinue) <- case ((mode juo), c) of
@@ -140,7 +136,7 @@ loopJuo juo conf = do
       setBlockCursor
 
       let _juo = case (mode juo) of
-            Juo.Normal -> juo {mult = []}
+            Juo.Normal -> juo {multBuf = [], commandBuf = []}
             Juo.Command -> juo {messageBuf = "", mode = Juo.Normal}
             Juo.Insert -> do
               let _juo = juo {mode = Juo.Normal}
@@ -154,10 +150,18 @@ loopJuo juo conf = do
       resizeEditor juo
 
     (Juo.Normal, ch) -> do
-      case mult juo of
-        "" -> handleNormalMode (updateLastChar juo ch) conf ch
+      let buf = if null (commandBuf juo)
+          then
+            ""
+          else
+            case head (commandBuf juo) of
+                c | c `elem` [up conf, down conf, left conf, right conf] -> 
+                    tail (commandBuf juo)
+                  | otherwise -> commandBuf juo
+
+      case buf of
         "d" -> do -- Sub-mode 'Delete'
-          let _juo = juo {mult = ""}
+          let _juo = juo {commandBuf = ""}
           setBlockCursor
           case ch of
             CUR.KeyChar c
@@ -169,12 +173,18 @@ loopJuo juo conf = do
               | otherwise       -> return (_juo, True)
             _ -> return (_juo, True)  -- fallback if not a KeyChar
         "g" -> do -- Sub-mode 'g'
-          let _juo = juo {mult = ""}
+          let _juo = juo {commandBuf = ""}
           case ch of
             CUR.KeyChar c
               | c == 'g'        -> return ((moveCursor _juo Juo.Up 999999), True)
               | otherwise       -> return (_juo, True)
             _ -> return (_juo, True)  -- fallback if not a KeyChar
+
+        {-_ | Juo.Util.isDigit (multBuf juo) ->
+            let CUR.KeyChar c = ch
+            in return (juo { multBuf = multBuf juo ++ [c]}, True)-}
+
+        _ -> handleNormalMode (updateLastChar (juo { commandBuf = buf }) ch) conf ch
 
 
     -- NOTE: SELECT MODE BINDINGS
@@ -218,19 +228,7 @@ loopJuo juo conf = do
 
     (_, key) -> 
       return ((insertNewMessage juo ("Unrecognized input: _" ++ (show key) ++ "_")), True)
-
-  -- Post interaction changes for next draw loop
-  juo <- case (mult juo) of
-    "d" -> do
-      setUnderscoreCursor
-      return juo
-    "dd" -> do
-      let _juo = juo {mult = ""}
-      setBlockCursor
-      return (deleteLine _juo)
-    _ -> do
-      return juo
-
+    
   when shouldContinue (loopJuo juo conf)
 
 {-where

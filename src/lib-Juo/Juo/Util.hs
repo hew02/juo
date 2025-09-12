@@ -5,13 +5,15 @@ module Juo.Util (
     setUnderscoreCursor,
     newColor,
     removeSpaces,
-    getLineLength
+    getLineLength,
+    isDigit
 ) where
 
 import System.IO (hFlush, stdout)
 import qualified UI.HSCurses.Curses as HC
 
 import Data.Char (isSpace)
+import Text.Read (readMaybe)
 
 numOfDigit :: Integer -> Int
 numOfDigit = go 1 . abs
@@ -56,3 +58,9 @@ removeSpaces str = filter (not . isSpace) str
 getLineLength :: String -> Int
 getLineLength lineContent = 
   sum $ map (\c -> if c == '\t' then 4 else 1) lineContent
+
+isDigit :: String -> Bool
+isDigit s = 
+  case (readMaybe s :: Maybe Double) of
+    Just _ -> True
+    Nothing -> False
