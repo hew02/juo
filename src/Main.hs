@@ -1,20 +1,17 @@
 module Main (main) where
 
-import Brick
--- import System.IO
-
--- import System.Directory
-
-import Control.Concurrent
--- import System.Console.ANSI
-
-import Control.Exception (IOException, try)
-import Control.Monad (when)
-import Data.Char
 import Juo
 import Juo.Config
 import Juo.Draw
 import Juo.Util
+
+-- import System.IO
+-- import System.Directory
+import Control.Concurrent
+-- import System.Console.ANSI
+import Control.Exception (IOException, try)
+import Control.Monad (when)
+import Data.Char
 import System.Environment (getArgs, getProgName, setEnv, unsetEnv)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath
@@ -46,38 +43,42 @@ printArgs :: [String] -> IO ()
 printArgs [] = putStr "\n"
 printArgs (arg:args) = putStrLn arg-}
 
-updateLastChar :: Juo -> Char -> Juo
+updateLastChar :: Juo -> CUR.Key -> Juo
 updateLastChar juo ch =
   juo
     { lastCharPressed = Just ch
     }
 
--- | height, width, y offset and x offset
---
--- Arguments:
---
--- *@h@ - Height
---
--- Returns a new `Juo` window.
-newWindow :: Int -> Int -> Int -> Int -> IO Juo.Window
-newWindow h w yOff xOff = do
-  newWin <- CUR.newWin h w yOff xOff
-  return
-    Juo.Window
-      { win = newWin,
-        size = (h - yOff, w - xOff),
-        height = h,
-        width = w
-      }
+parseFile :: FileName -> FullText -> Juo.File
+parseFile filename text =
+  let fileType = case takeExtension filename of
+        ".hs" -> Juo.Haskell
+        ".lhs" -> Juo.Haskell
+        ".txt" -> Juo.PlainText
+        ".md" -> Juo.Markdown
+        ".c" -> Juo.C
+        ".cpp" -> Juo.Cpp
+        ".c++" -> Juo.Cpp
+        ".cc" -> Juo.Cpp
+        ".java" -> Juo.Java
+        ".ml" -> Juo.OCaml
+        ".mli" -> Juo.OCaml
+        ext -> Juo.Unknown ext
 
-startJuo :: Juo -> Config -> IO ()
-startJuo juo settings = do
-  let dummyOffsetX = 2
+      ls = lines text
+      ds = parseLine ls
+   in Juo.File
+        { fileContent = ds,
+          fileLength = length ds,
+          fileType = fileType,
+          filePath = filename
+        }
+  where
+    parseLine :: [String] -> [DocumentLine]
+    parseLine = map (\l -> DocumentLine l (getLineLength l))
 
-  (winH, winW) <- CUR.scrSize
-  _toolbarWindow <- newWindow 2 winW (winH - 2) 0
-  _editorWindow <- newWindow (winH - height _toolbarWindow) winW 0 dummyOffsetX
-
+startJuo :: FileName -> FullText -> Config -> IO ()
+startJuo filename content settings = do
   -- CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 1))
 
   -- let bkgrndColor  = CUR.attrPlus (CURHELP.ForegroundColor CURHELP.RedF) (CURHELP.BackgroundColor CURHELP.DarkBlueB)
@@ -89,71 +90,19 @@ startJuo juo settings = do
 
   CUR.keypad CUR.stdScr True
   CUR.noDelay CUR.stdScr True
-  CUR.keypad (win _editorWindow) True
-  CUR.noDelay (win _editorWindow) True
-  CUR.keypad (win _toolbarWindow) True
-  CUR.noDelay (win _toolbarWindow) True
+
 
   CUR.echo False
 
-  let _juo =
-        juo
-          { cursorPos = (0, 0),
-            documentPos = (0, 0),
-            editorWindow = _editorWindow,
-            toolbarWindow = _toolbarWindow,
-            windowSize = (winH, winW),
-            mult = "",
-            shortcutBuf = "",
-            currentLineLength = lineLength (head (document juo)),
-            mode = Juo.Normal,
-            messageBuf = "",
-            fullMessageBuf = [DocumentLine "" 0],
-            editedDocument = False,
-            topOffset = 0
-          }
+  let file = parseFile filename content
 
-  loopJuo _juo settings
+  juo <- newJuo (Just file)
 
-resizeEditor :: Juo -> IO (Juo, Bool)
-resizeEditor juo = do
-  CUR.endWin
-  CUR.refresh
-  (winH, winW) <- CUR.scrSize
-
-  let dummyOffsetX = 3
-      offsetY = 2
-      newMessage = "Resized to: " ++ show winH ++ "r x " ++ show winW ++ "c."
-
-  _editorWindow <- newWindow (winH - offsetY) winW 0 dummyOffsetX
-  _toolbarWindow <- newWindow 2 winW (winH - 2) 0
-
-  CUR.delWin (win (editorWindow juo))
-  CUR.delWin (win (toolbarWindow juo))
-
-  CUR.wRefresh CUR.stdScr
-  CUR.wRefresh (win _editorWindow)
-  CUR.wRefresh (win _toolbarWindow)
-
-  -- CUR.wbkgd (win _editorWindow) (CUR.ChType ' ' (CUR.attr0, CUR.Pair 2))
-
-  let _juo =
-        insertNewMessage
-          juo
-            { windowSize = (winH, winW),
-              editorWindow = _editorWindow,
-              toolbarWindow = _toolbarWindow
-            }
-          newMessage
-
-  CUR.bkgrndSet CUR.attr0 (CUR.Pair 2)
-
-  return (_juo, True)
+  loopJuo juo settings
 
 loopJuo :: Juo -> Config -> IO ()
-loopJuo juo settings = do
-  let (l, _) = documentPos juo
-      (y, _) = cursorPos juo
+loopJuo juo conf = do
+  let l = dy juo
 
   _ <- CUR.cursSet CUR.CursorInvisible
 
@@ -164,16 +113,16 @@ loopJuo juo settings = do
   CUR.werase (win (editorWindow juo))
   case mode juo of
     Juo.Insert -> do
-      paintContent juo settings (document juo)
+      paintContent juo conf (getFileContent juo)
       setBarCursor
-    Juo.Message -> paintContent juo settings (fullMessageBuf juo)
-    _ -> paintContent juo settings (document juo)
+    Juo.Message -> paintContent juo conf (fullMessageBuf juo)
+    _ -> paintContent juo conf (getFileContent juo)
 
   -- NOTE: Always update cursor *after* drawing
-  updateCursor juo
+  juo <- updateCursor juo
 
   CUR.werase (win (toolbarWindow juo))
-  drawToolbar juo settings
+  drawToolbar juo conf
 
   CUR.wnoutRefresh CUR.stdScr
   CUR.wnoutRefresh (win (toolbarWindow juo))
@@ -195,11 +144,8 @@ loopJuo juo settings = do
             Juo.Command -> juo {messageBuf = "", mode = Juo.Normal}
             Juo.Insert -> do
               let _juo = juo {mode = Juo.Normal}
-               in if (lastCharPressed juo) == Just 'a'
-                    then
-                      (moveCursor _juo Juo.Left 1)
-                    else
-                      _juo
+                in
+                  (moveCursor _juo Juo.Left 1)
             _ -> juo {mode = Juo.Normal}
       return (_juo, True)
 
@@ -207,113 +153,29 @@ loopJuo juo settings = do
     (_, CUR.KeyResize) -> do
       resizeEditor juo
 
-    -- NOTE: NORMAL MODE BINDINGS
-    (Juo.Normal, CUR.KeyChar ch) -> do
-      (_juo, cont) <- case ch of
-        _
-          | ch == (delete settings) -> do
-              let _juo = deleteChar juo
-               in return (_juo, True)
-          | ch `elem` ['1' .. '9'] ->
-              let _juo = updateMult juo ch
-               in return (_juo, True)
-          | ch == '0' ->
-              let _juo =
-                    juo
-                      { cursorPos = ((y), 0),
-                        documentPos = (l, 0)
-                      }
-               in return (_juo, True)
-          | ch == '$' ->
-              let newCol =
-                    if (currentLineLength juo) > 0
-                      then
-                        (currentLineLength juo) - 1
-                      else 0
-               in let _juo =
-                        juo
-                          { cursorPos =
-                              ( (y),
-                                newCol
-                              ),
-                            documentPos = (l, newCol)
-                          }
-                   in return (_juo, True)
-          | ch == 'd' -> do
-              let _juo = updateMult juo ch
-              return (_juo, True)
+    (Juo.Normal, ch) -> do
+      case mult juo of
+        "" -> handleNormalMode (updateLastChar juo ch) conf ch
+        "d" -> do -- Sub-mode 'Delete'
+          let _juo = juo {mult = ""}
+          setBlockCursor
+          case ch of
+            CUR.KeyChar c
+              | c == 'd'        -> return (deleteLine _juo, True)
+              | c == up conf    -> return (deleteLine (moveCursor _juo Juo.Up 1), True)
+              | c == down conf  -> return (deleteLine (deleteLine _juo), True)
+              | c == left conf  -> return (deleteChar (moveCursor _juo Juo.Left 1), True)
+              | c == right conf -> return (deleteChar (moveCursor _juo Juo.Right 1), True)
+              | otherwise       -> return (_juo, True)
+            _ -> return (_juo, True)  -- fallback if not a KeyChar
+        "g" -> do -- Sub-mode 'g'
+          let _juo = juo {mult = ""}
+          case ch of
+            CUR.KeyChar c
+              | c == 'g'        -> return ((moveCursor _juo Juo.Up 999999), True)
+              | otherwise       -> return (_juo, True)
+            _ -> return (_juo, True)  -- fallback if not a KeyChar
 
-          -- NOTE: SWITCH MODE
-          | ch == 'i' -> do
-              let _juo =
-                    juo
-                      { mode = Juo.Insert
-                      }
-               in return (_juo, True)
-          | ch == 'a' -> return ((appendChar juo), True)
-          | ch == 'o' -> return ((newLine juo), True)
-          | ch == 's' -> do
-              CUR.wAttrSet CUR.stdScr (CUR.attr0, (CUR.Pair 3))
-
-              let _juo =
-                    juo
-                      { mode = Juo.Select
-                      }
-               in return (_juo, True)
-          | ch == 'm' -> do
-              let _juo =
-                    juo
-                      { mode = Juo.Message
-                      }
-               in return (_juo, True)
-          | ch == ';' ->
-              let _juo =
-                    juo
-                      { mode = Juo.Command,
-                        messageBuf = ""
-                      }
-               in return (_juo, True)
-          -- NOTE: NORMAL MODE SHORTCUTS
-          | ch == 'r' -> do
-              let _juo =
-                    juo
-                      { mode = Juo.Normal
-                      }
-               in return (_juo, True)
-          | ch == (up settings) ->
-              if (mult juo) == "d"
-                then do
-                  let _juo = juo {mult = ""}
-                  setBlockCursor
-                  return (deleteLine (moveCursor _juo Juo.Up 1), True)
-                else
-                  return ((moveCursor juo Juo.Up 1), True)
-          | ch == down settings ->
-              if (mult juo) == "d"
-                then do
-                  let _juo = juo {mult = ""}
-                  setBlockCursor
-                  return (deleteLine (deleteLine _juo), True)
-                else
-                  return ((moveCursor juo Juo.Down 1), True)
-          | ch == (left settings) ->
-              if (mult juo) == "d"
-                then do
-                  let _juo = juo {mult = ""}
-                  setBlockCursor
-                  return (deleteChar (moveCursor _juo Juo.Left 1), True)
-                else
-                  return ((moveCursor juo Juo.Left 1), True)
-          | ch == (right settings) ->
-              if (mult juo) == "d"
-                then do
-                  let _juo = juo {mult = ""}
-                  setBlockCursor
-                  return (deleteChar (moveCursor _juo Juo.Right 1), True)
-                else
-                  return ((moveCursor juo Juo.Right 1), True)
-          | otherwise -> return (juo, True)
-      return (updateLastChar _juo ch, cont)
 
     -- NOTE: SELECT MODE BINDINGS
     (Juo.Select, _) -> return (juo, True)
@@ -353,9 +215,11 @@ loopJuo juo settings = do
               { messageBuf = if null (messageBuf juo) then "" else (init (messageBuf juo))
               }
        in return (_juo, True)
-    (Juo.Normal, _) -> return (juo, True)
-    _ -> return (juo, False)
 
+    (_, key) -> 
+      return ((insertNewMessage juo ("Unrecognized input: _" ++ (show key) ++ "_")), True)
+
+  -- Post interaction changes for next draw loop
   juo <- case (mult juo) of
     "d" -> do
       setUnderscoreCursor
@@ -367,7 +231,7 @@ loopJuo juo settings = do
     _ -> do
       return juo
 
-  when shouldContinue (loopJuo juo settings)
+  when shouldContinue (loopJuo juo conf)
 
 {-where
 
@@ -384,44 +248,6 @@ loopJuo juo settings = do
             else if (modifier juo) == ['1'] then 0
             else read (modifier juo)-}
 -}
-
-_parseLine :: [String] -> [DocumentLine]
-_parseLine = map (\l -> DocumentLine l (length l))
-
-parseDocument :: FileName -> FullText -> Juo
-parseDocument filename text =
-  let fileType = case takeExtension filename of
-        ".hs" -> Juo.Haskell
-        ".lhs" -> Juo.Haskell
-        ".txt" -> Juo.PlainText
-        ".md" -> Juo.Markdown
-        ".c" -> Juo.C
-        ".cpp" -> Juo.Cpp
-        ".c++" -> Juo.Cpp
-        ".cc" -> Juo.Cpp
-        ".java" -> Juo.Java
-        ".ml" -> Juo.OCaml
-        ".mli" -> Juo.OCaml
-        ext -> Juo.Unknown ext
-
-      ls = lines text
-      ds = _parseLine ls
-   in Juo
-        { document = ds,
-          documentLength = length ds,
-          documentType = fileType,
-          filePath = filename
-        }
-
-newColor :: CUR.Color -> (Int, Int, Int) -> IO ()
-newColor colorNum (r, g, b) =
-  let r' = round ((fromIntegral r) * ratio)
-      g' = round ((fromIntegral g) * ratio)
-      b' = round ((fromIntegral b) * ratio)
-   in CUR.initColor colorNum (r', g', b')
-  where
-    ratio :: Double
-    ratio = 3.92156862745
 
 main :: IO ()
 main = do
@@ -458,32 +284,7 @@ main = do
         else do
           CUR.startColor
 
-          newColor (CUR.Color 1) (toolbarBgColor settings)
-
-          CUR.initPair (CUR.Pair 1) CURHELP.black (CUR.Color 1)
-
-          -- CUR.initPair (CUR.Pair 1) CURHELP.white CURHELP.defaultColor
-
-          newColor (CUR.Color 33) (255, 255, 255)
-
-          newColor (CUR.Color 32) (85, 85, 85)
-
-          newColor (CUR.Color 44) (57, 255, 20)
-
-          newColor (CUR.Color 69) (18, 18, 18)
-          newColor (CUR.Color 72) (12, 12, 12)
-
-          CUR.initPair (CUR.Pair 4) CURHELP.white CURHELP.blue
-
-          CUR.initPair (CUR.Pair 2) (CUR.Color 33) (CUR.Color 69)
-
-          CUR.initPair (CUR.Pair 8) (CUR.Color 32) (CUR.Color 69)
-
-          -- Mode
-          CUR.initPair (CUR.Pair 3) (CUR.Color 69) (CUR.Color 44)
-
-          -- Toolbar
-          CUR.initPair (CUR.Pair 5) (CUR.Color 33) (CUR.Color 72)
+          initColors conf
 
           let filename = head args
 
@@ -493,7 +294,7 @@ main = do
                 Prelude.Left _ -> "" -- Creating a new file!
                 Prelude.Right text -> text
 
-          startJuo (parseDocument filename content) settings
+          startJuo filename content conf
 
       exitJuo
 
@@ -511,7 +312,7 @@ main = do
   -- editorLoop (lines content)
   exitSuccess
   where
-    settings =
+    conf =
       Config
         { up = 'k',
           down = 'j',
@@ -521,5 +322,6 @@ main = do
           cursorCmd = ':',
           showLineNumbers = False,
           tabDepth = 4,
-          toolbarBgColor = (255, 255, 255)
+          toolbarBgColor = (255, 255, 255),
+          scrollDistance = 4
         }

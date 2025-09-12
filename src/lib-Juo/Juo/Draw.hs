@@ -14,8 +14,8 @@ import Control.Monad (when)
 import Data.Char (ord)
 import Foreign.C.Types ()
 import Juo
+import Juo.Util
 import Juo.Config
-import System.IO (hFlush, stdout)
 import qualified UI.HSCurses.Curses as CUR
 
 -- HSCurses abstraction
@@ -32,84 +32,89 @@ drawLine :: Juo.Window -> Config -> Int -> Int -> String -> IO ()
 drawLine win _conf row col [] =
   drawCh win row col ' '
 drawLine win conf row col ('\t' : content) = do
-  draw win row col (replicate (tabDepth conf) ' ')
+  draw win row col ("|" ++ (replicate (tabDepth conf - 1) ' '))
   drawLine win conf row (col + 4) content
 drawLine win conf row col (c : content) = do
   drawCh win row col c
   drawLine win conf row (col + 1) content
 
+setColor :: Juo.Window -> EditorSection -> IO ()
+setColor Juo.Window{..} section =
+  let color = case section of
+        Background -> (CUR.attr0, CUR.Pair 8)
+        EditorBackground -> (CUR.attr0, CUR.Pair 6)
+        Toolbar -> (CUR.attr0, CUR.Pair 1)
+        LeftColumn -> (CUR.attr0, CUR.Pair 7)
+  in
+    CUR.wAttrSet win color
+
+
 paintContent :: Juo -> Config -> [DocumentLine] -> IO ()
 paintContent Juo {..} conf buf = do
   CUR.wAttrSet (win editorWindow) (CUR.attr0, CUR.Pair 2)
-  go 0 winH (drop topOffset buf)
+  go 0 winH (drop vertOffset buf)
   where
-    (winH, _) = windowSize
-    (_, winW) = size editorWindow
+    (winH, winW) = size editorWindow
 
-    go _ 2 _ = return ()
+    go _ 0 _ = return ()
     go row n [] = do
-      CUR.wAttrSet CUR.stdScr (CUR.attr0, CUR.Pair 8)
+      setColor editorWindow EditorBackground
       draw editorWindow row 0 (replicate winW ' ')
-      CUR.mvWAddStr CUR.stdScr row 0 "~"
+      CUR.wAttrSet CUR.stdScr (CUR.attr0, CUR.Pair 7)
+      CUR.mvWAddStr CUR.stdScr row 0 "~ "
       go (row + 1) (n - 1) []
     go row n (line : rest) = do
+      -- Draw sidebard background for this line
+      CUR.wAttrSet CUR.stdScr (CUR.attr0, CUR.Pair 7)
+      CUR.mvWAddStr CUR.stdScr row 0 "  "
+
+      -- Draw background for this line
+      setColor editorWindow EditorBackground
       draw editorWindow row 0 (replicate winW ' ')
-      when (showLineNumbers conf) (CUR.mvWAddStr CUR.stdScr row 1 (show (row + 1)))
-      _ <- drawLine editorWindow conf row 0 (lineContent line)
+
+      when (showLineNumbers conf) 
+        (CUR.mvWAddStr CUR.stdScr row 1 (show (row + 1)))
+
+      -- shift horizontally
+      let visible = take winW $ drop horizOffset (lineContent line)
+
+      _ <- drawLine editorWindow conf row 0 visible
       go (row + 1) (n - 1) rest
+
 
 drawToolbar :: Juo -> Config -> IO ()
 drawToolbar Juo {..} settings = do
   let (_, winW) = size toolbarWindow
-      fileTypeStr = show documentType
-      (l, c) = documentPos
+      fileTypeStr = show (getFileType currentFile)
       lHeight = 0
 
-  let colStr = show (c + 1) ++ "C"
-      lineStr = show (l + 1) ++ "L"
+  let colStr = show (dx + 1) -- ++ "C"
+      lineStr = show (dy + 1) -- ++ "L"
 
   let maxMultLen = 8
       modeText = show mode
 
-  CUR.wAttrSet (win toolbarWindow) (CUR.attr0, CUR.Pair 1)
-
-  draw toolbarWindow 0 0 (replicate winW ' ')
-
-  draw toolbarWindow 0 (1 + length modeText) filePath
-
+  setColor toolbarWindow Background
+  draw toolbarWindow 1 0 (replicate (winW - 1) ' ')
+  draw toolbarWindow 1 1 messageBuf
   draw toolbarWindow 1 (winW - maxMultLen) (take (maxMultLen - 1) mult)
 
-  draw toolbarWindow lHeight (winW - length fileTypeStr - 2 - length lineStr) lineStr
-  draw toolbarWindow lHeight (winW - length fileTypeStr - 3 - length lineStr) ":"
-  draw toolbarWindow lHeight (winW - length fileTypeStr - 3 - length colStr - length lineStr) colStr
+  -- Command buffer
+  when (mode == Juo.Command) (draw toolbarWindow 1 0 [cursorCmd settings])
 
-  draw toolbarWindow lHeight (winW - length fileTypeStr - 1) fileTypeStr
+  setColor toolbarWindow Toolbar
+  draw toolbarWindow 0 0 (replicate (winW - 1) ' ')
+  draw toolbarWindow 0 (1 + length modeText) (getFilePath currentFile)
+  draw toolbarWindow lHeight (winW - length fileTypeStr - 4) ")"
+  draw toolbarWindow lHeight (winW - length fileTypeStr - 4 - length colStr) colStr
+  draw toolbarWindow lHeight (winW - length fileTypeStr - 5 - length colStr) ","
+  draw toolbarWindow lHeight (winW - length fileTypeStr - 5 - length lineStr - length colStr) lineStr
+  draw toolbarWindow lHeight (winW - length fileTypeStr - 6 - length lineStr - length colStr) "("
+
+  draw toolbarWindow lHeight (winW - length fileTypeStr - 2) fileTypeStr
 
   -- Mode
   CUR.wAttrSet (win toolbarWindow) (CUR.attr0, CUR.Pair 3)
   draw toolbarWindow 0 0 modeText
 
-  CUR.wAttrSet (win toolbarWindow) (CUR.attr0, CUR.Pair 5)
-  when editedDocument (draw toolbarWindow 0 (1 + length modeText + length filePath) "*")
-  draw toolbarWindow 1 1 messageBuf
-
-  -- Command buffer
-  when (mode == Juo.Command) (draw toolbarWindow 1 0 [cursorCmd settings])
-
--- | Sets to pipe character.
-setBarCursor :: IO ()
-setBarCursor = do
-  putStr "\ESC[6 q"
-  hFlush stdout
-
--- | Sets to full block character.
-setBlockCursor :: IO ()
-setBlockCursor = do
-  putStr "\ESC[0 q"
-  hFlush stdout
-
--- | Sets to underscore character.
-setUnderscoreCursor :: IO ()
-setUnderscoreCursor = do
-  putStr "\ESC[4 q"
-  hFlush stdout
+  when editedDocument (draw toolbarWindow 0 (1 + length modeText + length (getFilePath currentFile)) "*")

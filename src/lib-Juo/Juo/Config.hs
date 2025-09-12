@@ -21,5 +21,7 @@ data Config = Config {
     tabDepth        :: Int,
 
     -- Colors
-    toolbarBgColor  :: Color
+    toolbarBgColor  :: Color,
+
+    scrollDistance  :: Int
 }
