@@ -1,5 +1,8 @@
-module Test where
+module Main where
 
-import Squire
+import System.Exit (exitFailure)
+import Juo
 
 main = do
+    putStrLn "This test always fails!"
+    exitFailure

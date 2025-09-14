@@ -44,7 +44,7 @@ Test-Suite test
     type: exitcode-stdio-1.0
     hs-source-dirs: test
     main-is: Test.hs
-    build-depends: base
+    build-depends: base, juo
 
 common warnings
     ghc-options: -Wall
@@ -52,20 +52,11 @@ common warnings
 common flags
     ghc-options: -threaded
 
-executable juo
-    -- Import common warning flags.
+library 
     import:           warnings, flags
-
-    -- .hs or .lhs file containing the Main module.
-    main-is:          Main.hs
-
-    -- Modules included in this executable, other than Main.
-    other-modules:    Juo, Juo.Config, Juo.Draw, Juo.Util, Juo.Actions
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    -- Other library packages from which modules are imported.
+    exposed-modules:  Juo, Juo.Config, Juo.Draw, Juo.Util
+    other-modules:    Juo.Actions
+    hs-source-dirs:   src, src/lib-Juo, src/lib-Juo/Juo/
     build-depends:    directory, 
                       base, 
                       filepath, 
@@ -74,9 +65,13 @@ executable juo
                       ansi-terminal, 
                       hasqtan,
                       process
+    default-language: Haskell2010
 
-    -- Directories containing source files.
-    hs-source-dirs:   src, src/lib-Juo, src/lib-Juo/Juo/
-
-    -- Base language which the package is written in.
+executable juo
+    import:           warnings, flags
+    main-is:          Main.hs
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+    build-depends:    base, juo, hscurses, process, hasqtan, unix, filepath
+    hs-source-dirs:   src
     default-language: Haskell2010
