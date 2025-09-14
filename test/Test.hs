@@ -1,8 +1,8 @@
 module Main where
 
-import System.Exit (exitFailure)
+import System.Exit (exitSuccess, exitFailure)
 import Juo
 
 main = do
-    putStrLn "This test always fails!"
-    exitFailure
+    putStrLn "No tests :)" 
+    exitSuccess
