@@ -253,7 +253,12 @@ newJuo maybeFile = do
     Nothing -> return juo
     Just file -> return juo {
       currentFile = file,
-      currentLineLength = lineLength (head (getFileContent file))
+      currentLineLength = 
+        let cnt = getFileContent file in
+            if null cnt then
+                0
+            else
+                lineLength (head cnt)
     }
 
 data Direction = Up | Down | Left | Right

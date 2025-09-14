@@ -1,0 +1,4 @@
+
+on MacOS
+
+use otool -L *bin* to view dynamic lib dependencies.
