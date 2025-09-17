@@ -74,5 +74,5 @@ executable juo
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
     build-depends:    base, juo, hscurses, process, hasqtan, unix, filepath
-    hs-source-dirs:   src
+    hs-source-dirs:   src, src/lib-Juo
     default-language: Haskell2010

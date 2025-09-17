@@ -35,7 +35,7 @@ import Juo.Config
 import Juo.Util
 import qualified Juo.Types as JT
 
-import Data.Stack as DS
+import qualified Data.Stack as DS
 
 import Control.Exception (IOException, try)
 import qualified Hasqtan as Hasq
@@ -96,9 +96,12 @@ data Juo = Juo
 
     insertionBuffer :: String,
 
+    hasqtanEnv :: (Hasq.OpEnv, Hasq.TypeEnv),
+    hasqtanConf :: Hasq.Config,
+
     -- HACK for now we take the somewhat dumb approach
     -- of storing edited lines in this stack, we can slim this down to just 
-    -- actions and positions of change  later.
+    -- actions and positions of change later.
     undoHistory :: DS.Stack [(Int, JT.DocumentLine)] 
 
   }
@@ -188,6 +191,11 @@ newJuo maybeFile = do
     horizOffset = 0,
 
     insertionBuffer = "",
+
+    hasqtanEnv = ([],[]),
+    hasqtanConf = Hasq.Config {
+      shouldShowType = False
+    },
 
     undoHistory = DS.empty
   }
@@ -571,13 +579,17 @@ execCommand juo = do
               }
       return (juo', True)
     _ -> do
-      let output = take winW (Hasq.interp (messageBuf juo))
-          juo' =
-            juo
-              { messageBuf = output,
-                mode = JT.Normal
-              }
-      return (juo', True)
+      let (maybeOut, env) = Hasq.interp (messageBuf juo) (hasqtanEnv juo) (hasqtanConf juo)
+      return (
+        case maybeOut of
+          Just out ->
+                juo
+                  { messageBuf = take winW (out),
+                    mode = JT.Normal
+                  }
+          Nothing ->
+            juo { messageBuf = "", mode = JT.Normal }
+          , True)
 
 getFileSize :: Juo -> Int
 getFileSize juo = sum (map len (getFileContent juo))

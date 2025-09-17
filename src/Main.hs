@@ -231,9 +231,9 @@ loopJuo juo conf = do
     (_, key) ->
       return (insertNewMessage juo ("Unrecognized input: _" ++ show key ++ "_"), True)
 
-  if not (editedDocument juo) && DS.size undoHistory juo == 0
+  if DS.size (undoHistory juo) > 0
     then when shouldContinue (loopJuo juo { editedDocument = True } conf)
-    else when shouldContinue (loopJuo juo conf)
+    else when shouldContinue (loopJuo juo { editedDocument = False } conf)
 
 {-where
 
@@ -268,8 +268,7 @@ main = do
   args <- getArgs
   if length args /= 1
     then do
-      p <- getProgName
-      putStrLn ("Usage: " ++ p ++ " <filename>")
+      putStrLn ("Usage: juo <filename>")
       exitFailure
     else do
       setEnv "ESCDELAY" "0"

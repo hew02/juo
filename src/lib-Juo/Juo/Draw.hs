@@ -81,7 +81,7 @@ drawToolbar juo conf = do
       exBuf = messageBuf juo
       multBuff = if multBuf juo /= 0 then show (multBuf juo) else ""
       cmdBuf = commandBuf juo
-      doc = editedDocument juo
+      isEdited = editedDocument juo
       file = currentFile juo
       _dx = dx juo
       _dy = dy juo
@@ -116,8 +116,8 @@ drawToolbar juo conf = do
   draw toolbar lHeight (winW - length fileTypeStr - 5 - length colStr) ","
   draw toolbar lHeight (winW - length fileTypeStr - 5 - length lineStr - length colStr) lineStr
   draw toolbar lHeight (winW - length fileTypeStr - 6 - length lineStr - length colStr) "("
-
   draw toolbar lHeight (winW - length fileTypeStr - 2) fileTypeStr
+  when isEdited (draw toolbar 0 (1 + length modeText + length (getFilePath file)) "*")
 
   -- Mode
   _ <- case currMode of
@@ -126,5 +126,3 @@ drawToolbar juo conf = do
     JT.Command -> setColor toolbar JT.ModeEx
     _ -> setColor toolbar Background
   draw toolbar 0 0 modeText
-
-  when doc (draw toolbar 0 (1 + length modeText + length (getFilePath file)) "*")
