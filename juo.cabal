@@ -70,6 +70,7 @@ library
 executable juo
     import:           warnings, flags
     main-is:          Main.hs
+    other-modules:    Data.Stack
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
     build-depends:    base, juo, hscurses, process, hasqtan, unix, filepath

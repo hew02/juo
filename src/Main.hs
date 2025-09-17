@@ -6,6 +6,8 @@ import Juo.Draw
 import Juo.Util
 import qualified Juo.Types as JT
 
+import Data.Stack as DS
+
 import Control.Concurrent
 import Control.Exception (IOException, try)
 import Control.Monad (when)
@@ -140,7 +142,7 @@ loopJuo juo conf = do
                 else do
                   let newMessage = show JT.Inserted ++ " `" ++ insertionBuffer juo ++ "` @ " ++ show (dx juo + 1) ++ ":" ++ show (dy juo + 1)
                       _juo = juo {mode = JT.Normal, insertionBuffer = ""}
-                  
+
                   moveCursor (insertNewMessage _juo newMessage) JT.Left 1
             _ -> juo {mode = JT.Normal}
       return (_juo, True)
@@ -229,7 +231,9 @@ loopJuo juo conf = do
     (_, key) ->
       return (insertNewMessage juo ("Unrecognized input: _" ++ show key ++ "_"), True)
 
-  when shouldContinue (loopJuo juo conf)
+  if not (editedDocument juo) && DS.size undoHistory juo == 0
+    then when shouldContinue (loopJuo juo { editedDocument = True } conf)
+    else when shouldContinue (loopJuo juo conf)
 
 {-where
 
