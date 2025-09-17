@@ -8,20 +8,21 @@ module Juo.Config (Config(..)) where
 type Color = (Int, Int, Int)
 
 data Config = Config {
-    up              :: Char,
-    down            :: Char,
-    left            :: Char,
-    right           :: Char,
-    delete          :: Char,
+    up               :: Char,
+    down             :: Char,
+    left             :: Char,
+    right            :: Char,
+    delete           :: Char,
 
-    cursorCmd       :: Char,
+    cursorCmd        :: Char,
 
-    showLineNumbers :: Bool,
+    showLineNumbers  :: Bool,
 
-    tabDepth        :: Int,
+    tabDepth         :: Int,
 
     -- Colors
-    toolbarBgColor  :: Color,
+    useTerminalColor :: Bool,
+    toolbarBgColor   :: Color,
 
-    scrollDistance  :: Int
+    scrollDistance   :: Int
 }

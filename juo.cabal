@@ -54,8 +54,8 @@ common flags
 
 library 
     import:           warnings, flags
-    exposed-modules:  Juo, Juo.Config, Juo.Draw, Juo.Util
-    other-modules:    Juo.Actions
+    exposed-modules:  Juo, Juo.Types, Juo.Config, Juo.Draw, Juo.Util
+    other-modules:    Juo.Actions, Data.Stack
     hs-source-dirs:   src, src/lib-Juo, src/lib-Juo/Juo/
     build-depends:    directory, 
                       base, 

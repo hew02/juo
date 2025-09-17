@@ -5,7 +5,6 @@ module Juo.Util (
     setUnderscoreCursor,
     newColor,
     removeSpaces,
-    getLineLength,
     isDigit
 ) where
 
@@ -42,9 +41,9 @@ setUnderscoreCursor = do
 -- | Use RGB model based 0-255, rather than 0-1000.
 newColor :: HC.Color -> (Int, Int, Int) -> IO ()
 newColor colorNum (r, g, b) =
-  let r' = round ((fromIntegral r) * ratio)
-      g' = round ((fromIntegral g) * ratio)
-      b' = round ((fromIntegral b) * ratio)
+  let r' = round (fromIntegral r * ratio)
+      g' = round (fromIntegral g * ratio)
+      b' = round (fromIntegral b * ratio)
    in HC.initColor colorNum (r', g', b')
   where
     ratio :: Double
@@ -52,15 +51,10 @@ newColor colorNum (r, g, b) =
 
 -- | As it sounds.
 removeSpaces :: String -> String
-removeSpaces str = filter (not . isSpace) str
-
--- | Wrapper around `length` but we account for tab character width.
-getLineLength :: String -> Int
-getLineLength lineContent = 
-  sum $ map (\c -> if c == '\t' then 4 else 1) lineContent
+removeSpaces = filter (not . isSpace)
 
 isDigit :: String -> Bool
-isDigit s = 
+isDigit s =
   case (readMaybe s :: Maybe Double) of
     Just _ -> True
     Nothing -> False

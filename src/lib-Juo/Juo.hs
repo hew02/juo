@@ -3,14 +3,6 @@
 module Juo
   ( Juo (..),
     newJuo,
-    Direction (..),
-    DocumentLine (..),
-    FileType (..),
-    File(..),
-    Mode (..),
-    Window (..),
-    EditorSection(..),
-    FileDetails(..),
     moveCursor,
     updateCursor,
     deleteChar,
@@ -31,94 +23,27 @@ module Juo
 
     handleNormalMode,
 
-    initColors
+    initColors,
+
+    FileDetails(..),
+    setColor,
+    getTabCount
   )
 where
 
 import Juo.Config
 import Juo.Util
+import qualified Juo.Types as JT
+
+import Data.Stack as DS
 
 import Control.Exception (IOException, try)
-import Control.Monad (when)
 import qualified Hasqtan as Hasq
 import System.Environment (unsetEnv)
-import System.IO
 import System.Process (callCommand)
 import qualified UI.HSCurses.Curses as HC
 import qualified UI.HSCurses.CursesHelper as HCH
-
--- | Juo's builtin file types.
---
--- __Examples:__
---
--- @
--- c = 'Unknown' \"C\"
--- @
-data FileType
-  = Haskell
-  | PlainText
-  | Markdown
-  | C
-  | Cpp
-  | Hasqtan
-  | Java
-  | OCaml
-  | Unknown String
-  deriving (Eq)
-
-instance Show FileType where
-  show Haskell = "Haskell"
-  show PlainText = "Text"
-  show Markdown = "Markdown"
-  show C = "C"
-  show Cpp = "C++"
-  show Hasqtan = "Hasqtan"
-  show Java = "Java"
-  show OCaml = "OCaml"
-  show (Unknown other) = other
-
--- | Possible modes for Juo.
---
--- __Note:__
---
--- Will most likely remove 'Message' when buffers are introduced.
-data Mode = Normal | Insert | Select | Command | Message
-  deriving (Eq)
-
-instance Show Mode where
-  show Normal = ""
-  show Insert = " INS "
-  show Select = " SEL "
-  show Command = " EX "
-  show Message = " MSG "
-
-data Action = Inserted | Deleted
-  deriving (Eq)
-
-instance Show Action where
-  show Inserted = "Insert"
-  show Deleted = "Delete"
-
-data DocumentLine = DocumentLine
-  { lineContent :: String,
-    lineLength :: Int
-  }
-  deriving (Eq)
-
-data Window = Window
-  { win :: HC.Window,
-    size :: (Int, Int),
-    height :: Int,
-    width :: Int
-  }
-  deriving (Eq)
-
-data EditorSection 
-  = Background
-  | EditorBackground
-  | Toolbar
-  | LeftColumn
-  deriving (Eq)
+import Data.Char (digitToInt)
 
 -- | height, width, y offset and x offset
 --
@@ -127,29 +52,26 @@ data EditorSection
 -- *@h@ - Height
 --
 -- Returns a new `Juo` window.
-newWindow :: Int -> Int -> Int -> Int -> IO Juo.Window
+newWindow :: Int -> Int -> Int -> Int -> IO JT.Window
 newWindow h w yOff xOff = do
   newWin <- HC.newWin h w yOff xOff
   return
-    Juo.Window
+    JT.Window
       { win = newWin,
         size = (h - yOff, w - xOff),
-        height = h,
-        width = w
+        winHeight = h,
+        winWidth = w
       }
 
-mvCursor :: Window -> Int -> Int -> IO ()
-mvCursor Window {..} y x =
-  HC.wMove win y x
+class WindowDetails a where
+  getWindow :: a -> HC.Window
+  getWindowWidth :: a -> Int
+  getWindowHeight :: a -> Int
 
-data File = File 
-  {
-    fileContent :: [DocumentLine],
-    fileType :: FileType,
-    fileLength :: Int,
-    filePath :: String
-  }
-  deriving (Eq)
+instance WindowDetails JT.Window where
+  getWindow       = JT.win
+  getWindowWidth  = JT.winWidth
+  getWindowHeight = JT.winHeight
 
 data Juo = Juo
   { cy :: Int,
@@ -157,55 +79,72 @@ data Juo = Juo
     dy :: Int,
     dx :: Int,
 
-    multBuf :: String, -- Tracks numbers
+    multBuf :: Int, -- Tracks numbers
     commandBuf :: String, -- Tracks letter commands
 
     lastCharPressed :: Maybe HC.Key,
-    editorWindow :: Juo.Window,
-    toolbarWindow :: Juo.Window,
+    editorWindow :: JT.Window,
+    toolbarWindow :: JT.Window,
     windowSize :: (Int, Int),
-    currentFile :: File,
-    currentLineLength :: Int,
+    currentFile :: JT.File,
     editedDocument :: Bool,
-    mode :: Mode,
+    mode :: JT.Mode,
     messageBuf :: String,
-    fullMessageBuf :: [DocumentLine],
+    fullMessageBuf :: [JT.DocumentLine],
     vertOffset :: Int,
-    horizOffset :: Int
+    horizOffset :: Int,
+
+    insertionBuffer :: String,
+
+    -- HACK for now we take the somewhat dumb approach
+    -- of storing edited lines in this stack, we can slim this down to just 
+    -- actions and positions of change  later.
+    undoHistory :: DS.Stack [(Int, JT.DocumentLine)] 
+
   }
   deriving (Eq)
 
 getDX :: Juo -> Int
-getDX juo = dx juo
+getDX = dx
 
 getDY :: Juo -> Int
-getDY juo = dy juo
+getDY = dy
 
 getCX :: Juo -> Int
-getCX juo = cx juo
+getCX = cx
 
 getCY :: Juo -> Int
-getCY juo = cy juo
+getCY = cy
 
 class FileDetails a where
   getFileLength :: a -> Int
-  getFileType :: a -> FileType
-  getFileContent :: a -> [DocumentLine]
+  getFileType :: a -> JT.FileType
+  getFileContent :: a -> [JT.DocumentLine]
   getFilePath :: a -> String
+  getLineLength :: a -> Int -> Int
 
   setFileLength :: a -> Int -> a
-  setFileContent :: a -> [DocumentLine] -> a
+  setFileContent :: a -> [JT.DocumentLine] -> a
 
-instance FileDetails File where
-  getFileLength = fileLength
-  getFileType = fileType
-  getFileContent = fileContent
-  getFilePath = filePath
+instance FileDetails JT.File where
+  getFileLength = JT.fileLength
+  getFileType = JT.fileType
+  getFileContent = JT.fileContent
+  getFilePath = JT.filePath
 
-  setFileLength = \file len -> file { fileLength = len }
-  setFileContent = \file content -> file { fileContent = content,
-    fileLength = length content
+  getLineLength file line = if null (JT.fileContent file)
+    then -1
+    else JT.lineLength (JT.fileContent file !! line)
+
+  setFileLength file len = file { JT.fileLength = len }
+  setFileContent file content = file { JT.fileContent = content,
+    JT.fileLength = length content
   }
+
+{--- | Wrapper around `length` but we account for tab character width.
+getLineLength :: String -> Int
+getLineLength lineContent =
+  sum $ map (\c -> if c == '\t' then 4 else 1) lineContent-}
 
 instance FileDetails Juo where
   getFileLength = getFileLength . currentFile
@@ -213,24 +152,24 @@ instance FileDetails Juo where
   getFileContent = getFileContent . currentFile
   getFilePath = getFilePath . currentFile
 
-  setFileLength = \juo len ->
+  setFileLength juo len =
     juo { currentFile = setFileLength (currentFile juo) len }
-  setFileContent = \juo content ->
+  setFileContent juo content =
     juo { currentFile = setFileContent (currentFile juo) content }
 
-newJuo :: Maybe File -> IO Juo
+newJuo :: Maybe JT.File -> IO Juo
 newJuo maybeFile = do
 
   let dummyOffsetX = 2
 
   (winH, winW) <- HC.scrSize
   _toolbarWindow <- newWindow 2 winW (winH - 2) 0
-  _editorWindow <- newWindow (winH - height _toolbarWindow) winW 0 dummyOffsetX
+  _editorWindow <- newWindow (winH - getWindowHeight _toolbarWindow) winW 0 dummyOffsetX
 
-  HC.keypad (win _editorWindow) True
-  HC.noDelay (win _editorWindow) True
-  HC.keypad (win _toolbarWindow) True
-  HC.noDelay (win _toolbarWindow) True
+  HC.keypad (getWindow _editorWindow) True
+  HC.noDelay (getWindow _editorWindow) True
+  HC.keypad (getWindow _toolbarWindow) True
+  HC.noDelay (getWindow _toolbarWindow) True
 
   let juo = Juo { cy = 0,
     cx = 0,
@@ -239,29 +178,25 @@ newJuo maybeFile = do
     editorWindow = _editorWindow,
     toolbarWindow = _toolbarWindow,
     windowSize = (winH, winW),
-    multBuf = "",
+    multBuf = 0,
     commandBuf = "",
-    mode = Juo.Normal,
+    mode = JT.Normal,
     messageBuf = "",
-    fullMessageBuf = [DocumentLine "" 0],
+    fullMessageBuf = [JT.DocumentLine "" 0],
     editedDocument = False,
     vertOffset = 0,
-    horizOffset = 0
+    horizOffset = 0,
+
+    insertionBuffer = "",
+
+    undoHistory = DS.empty
   }
 
   case maybeFile of
     Nothing -> return juo
     Just file -> return juo {
-      currentFile = file,
-      currentLineLength = 
-        let cnt = getFileContent file in
-            if null cnt then
-                0
-            else
-                lineLength (head cnt)
+      currentFile = file
     }
-
-data Direction = Up | Down | Left | Right
 
 exitJuo :: IO ()
 exitJuo = do
@@ -270,42 +205,59 @@ exitJuo = do
   callCommand "stty sane"
   unsetEnv "ESCDELAY"
 
-updateCursor :: Juo -> IO Juo
-updateCursor juo = do
-  let dx = getDX juo
-      text = getFileContent juo
-      currLine =
-        if null text then DocumentLine "" 0
-        else text !! getDY juo
-      numOfTabsBefore =
-        length $ filter (== '\t') (take (dx + 1) (lineContent currLine))
+-- | Get number of tabs before current document position.
+getTabCount :: Juo -> Int
+getTabCount juo =
+  length $ filter (== '\t') (take (dx + 1) (JT.lineContent currLine))
+  where
+    dx = getDX juo
+    text = getFileContent juo
+    currLine =
+      if null text then JT.DocumentLine "" 0
+      else text !! getDY juo
 
+updateCursor :: Juo -> Config -> IO Juo
+updateCursor juo conf = do
   {-if x > lineLen || currentMode /= Juo.Insert
       then juo { cursorPos = (y, lineLen)
               , documentPos = (line, lineLen)
               }
       else juo-}
 
-  
+  let numOfTabsBefore = getTabCount juo
 
   -- Move based on # of tabs
-  mvCursor (editorWindow juo) (getCY juo) ((getCX juo) + (numOfTabsBefore * 3))
-
+  HC.wMove (JT.win (editorWindow juo)) (getCY juo) (getCX juo + (numOfTabsBefore * (tabDepth conf)))
 
   return juo
 
-moveCursor :: Juo -> Direction -> Int -> Juo
-moveCursor juo dir dist
-  | dist <= 0 = juo
-  | otherwise =
-    let juo' = moveCursorOnce juo dir
-    in if juo' == juo
-      then juo
-      else moveCursor juo' dir (dist - 1)
+reportToMessageBuffer :: Juo -> String -> Juo
+reportToMessageBuffer juo msg = do
+    let newMessages =
+          fullMessageBuf juo ++ [JT.DocumentLine msg (length msg)]
 
-moveCursorOnce :: Juo -> Direction -> Juo
+    juo {
+      fullMessageBuf = newMessages
+    }
+
+-- TODO We need a 'setCursor' function with the same rules but not the 
+-- useless computation of moving a cursor like.
+moveCursor :: Juo -> JT.Direction -> Int -> Juo
+moveCursor juo direction distance =
+  loopMove juo direction distance
+  where
+    loopMove :: Juo -> JT.Direction -> Int -> Juo
+    loopMove juo _ 0 = juo
+    loopMove juo dir dist =
+        let juo' = moveCursorOnce juo dir
+        in if juo' == juo
+          then juo
+          else loopMove juo' dir (dist - 1)
+
+moveCursorOnce :: Juo -> JT.Direction -> Juo
 moveCursorOnce juo dir =
-  let (winH, winW) = size (editorWindow juo)
+  let winH = getWindowHeight (editorWindow juo)
+      winW = getWindowWidth (editorWindow juo)
       line = dy juo
       col = dx juo
       ls = getFileContent juo
@@ -323,41 +275,39 @@ moveCursorOnce juo dir =
         | dx' >= horiz + winW = (winW - 1, dx' - (winW - 1))
         | otherwise = (dx' - horiz, horiz)
 
-      
+
    in case dir of
-        Juo.Up
+        JT.Up
           | line > 0 && cy juo > 0 ->
-              let prevLine = line - 1
-                  nextLength = lineLength (ls !! prevLine)
+              let nextLine = line - 1
+                  nextLength = JT.lineLength (ls !! nextLine)
                   newDx = clampEnd col nextLength
                   (newCx, newHoriz) = computeVisible newDx (horizOffset juo)
                in juo
                     { cy = cy juo - 1,
                       cx = newCx,
-                      dy = prevLine,
+                      dy = nextLine,
                       dx = newDx,
-                      horizOffset = newHoriz,
-                      currentLineLength = nextLength
+                      horizOffset = newHoriz
                     }
           -- Scroll up viewport
           | line > 0 && cy juo == 0 ->
-              let prevLine = line - 1
-                  nextLength = lineLength (ls !! prevLine)
+              let nextLine = line - 1
+                  nextLength = JT.lineLength (ls !! nextLine)
                   newDx = clampEnd col nextLength
                   (newCx, newHoriz) = computeVisible newDx (horizOffset juo)
                in juo
                     { cx = newCx,
-                      dy = prevLine,
+                      dy = nextLine,
                       dx = newDx,
                       horizOffset = newHoriz,
-                      vertOffset = vertOffset juo - 1,
-                      currentLineLength = nextLength
+                      vertOffset = vertOffset juo - 1
                     }
           | otherwise -> juo
-        Juo.Down
+        JT.Down
           | line + 1 < totalLines && cy juo + 1 < winH ->
               let nextLine = line + 1
-                  nextLength = lineLength (ls !! nextLine)
+                  nextLength = JT.lineLength (ls !! nextLine)
                   dx' = clampEnd col nextLength
                   (cx', horizOffset') = computeVisible dx' (horizOffset juo)
               in juo
@@ -365,13 +315,12 @@ moveCursorOnce juo dir =
                       cx = cx',
                       dy = nextLine,
                       dx = dx',
-                      horizOffset = horizOffset',
-                      currentLineLength = nextLength
+                      horizOffset = horizOffset'
                     }
           -- Scroll viewport down
           | line + 1 < totalLines && cy juo + 1 == winH ->
               let nextLine = line + 1
-                  nextLength = lineLength (ls !! nextLine)
+                  nextLength = JT.lineLength (ls !! nextLine)
                   dx' = clampEnd col nextLength
                   (cx', horizOffset') = computeVisible dx' (horizOffset juo)
               in juo
@@ -379,13 +328,12 @@ moveCursorOnce juo dir =
                   dx = dx',
                   cx = cx',
                   horizOffset = horizOffset',
-                  vertOffset = vertOffset juo + 1,
-                  currentLineLength = nextLength
+                  vertOffset = vertOffset juo + 1
                 }
 
           | otherwise -> juo
-        Juo.Left
-          | cx juo > 0 -> 
+        JT.Left
+          | cx juo > 0 ->
             juo
               { cx = cx juo - 1,
                 dx = col - 1
@@ -393,35 +341,38 @@ moveCursorOnce juo dir =
           | cx juo == 0 && dx juo > 0 ->
             juo
               { dx = dx juo - 1,
-                horizOffset = (horizOffset juo) - 1
+                horizOffset = horizOffset juo - 1
               }
           | otherwise -> juo
-        Juo.Right
+        JT.Right
           -- Cursor moves ahead one while inserting.
-          | mode juo == Juo.Insert -> do
+          | mode juo == JT.Insert -> do
             if cx juo + 2 > winW then
                 juo
                   { dx = dx juo + 1,
-                    horizOffset = (horizOffset juo) + 1
+                    horizOffset = horizOffset juo + 1
                   }
-              else 
+              else
                 juo
                   { cx = cx juo + 1,
                     dx = col + 1
                   }
-          
-          | cx juo + 1 < winW && col + 1 < (currentLineLength juo) -> do    
+
+          | cx juo + 3 < winW && col + 1 < currentLineLength -> do
             juo
               { cx = cx juo + 1,
                 dx = col + 1
               }
-          
-          | col + 1 < (currentLineLength juo) -> do
+
+          | col + 1 < currentLineLength -> do
             juo
               { dx = dx juo + 1,
-                horizOffset = (horizOffset juo) + 1
+                horizOffset = horizOffset juo + 1
               }
+
           | otherwise -> juo
+  where
+    currentLineLength = getLineLength (currentFile juo) (dy juo)
 
 findDiff :: String -> String -> [(Char, Char, Int)]
 findDiff s1 s2 =
@@ -432,7 +383,7 @@ findDiff s1 s2 =
 
 insertNewMessage :: Juo -> String -> Juo
 insertNewMessage juo msg =
-  let newMessages = (fullMessageBuf juo) ++ [DocumentLine msg (length msg)]
+  let newMessages = fullMessageBuf juo ++ [JT.DocumentLine msg (length msg)]
    in juo
         { fullMessageBuf = newMessages
         }
@@ -450,12 +401,12 @@ resizeEditor juo = do
     _editorWindow <- newWindow (winH - offsetY) winW 0 dummyOffsetX
     _toolbarWindow <- newWindow 2 (winW + 1) (winH - 2) 0
 
-    HC.delWin (win (editorWindow juo))
-    HC.delWin (win (toolbarWindow juo))
+    HC.delWin (getWindow (editorWindow juo))
+    HC.delWin (getWindow (toolbarWindow juo))
 
     HC.wRefresh HC.stdScr
-    HC.wRefresh (win _editorWindow)
-    HC.wRefresh (win _toolbarWindow)
+    HC.wRefresh (getWindow _editorWindow)
+    HC.wRefresh (getWindow _toolbarWindow)
 
     -- CUR.wbkgd (win _editorWindow) (CUR.ChType ' ' (CUR.attr0, CUR.Pair 2))
 
@@ -472,54 +423,65 @@ resizeEditor juo = do
 
     return (_juo, True)
 
--- Generalized: apply a transformation to the line at cursor
-doAtCursor :: Juo -> Action -> (String -> Int -> String) -> Juo
-doAtCursor juo action f =
-  let newContent = f content col
-      newLine =
-        currLine
-          { lineContent = newContent,
-            lineLength = getLineLength newContent
-          }
+updateLine :: String -> Maybe JT.DocumentLine  -> JT.DocumentLine
+updateLine content maybeLine =
+  let n = length content in
+  case maybeLine of
+    Just currentLine -> currentLine { -- NOTE not necessary, but could use this route for optimization later.
+      JT.lineContent = content,
+      JT.lineLength = n
+    }
+    Nothing -> JT.DocumentLine {
+      JT.lineContent = content,
+      JT.lineLength = n
+    }
 
-      newLines = take line text ++ [newLine] ++ drop (line + 1) text
-
-      differences = findDiff content newContent
-   in setFileContent (juo { fullMessageBuf = if null differences then fullMessageBuf juo else newMessages }) newLines
+-- | Applies a transformation to the line at cursor
+doAtCursor :: Juo -> (String -> Int -> String) -> Juo
+doAtCursor juo f =
+  let oldText = JT.lineContent currLine
+      newText = f oldText x
+      updatedLine = updateLine newText (Just currLine)
+      newLines = take y text ++ [updatedLine] ++ drop (y + 1) text
+   in setFileContent juo newLines
   where
-    line = dy juo
-    col = dx juo
+    y = dy juo
+    x = dx juo
     text = getFileContent juo
-    currLine = if null text then (DocumentLine "" 0) else text !! line
-    content = lineContent currLine
-    newMessage = (show action) ++ " `" ++ "` @ " ++ (show line) ++ ":" ++ (show col)
-    newMessages = (fullMessageBuf juo) ++ [DocumentLine newMessage (length newMessage)]
+    currLine = if null text then JT.DocumentLine "" 0 else text !! y
 
-deleteChar :: Juo -> Juo
-deleteChar juo = do
-  let line = dy juo
-      col = dx juo
-      currLine = if null text then (DocumentLine "" 0) else text !! line
-      juo' = doAtCursor juo Deleted $ \content col ->
-        take col content ++ drop (col + 1) content
+deleteChar :: Juo -> Maybe Int -> Juo
+deleteChar juoO maybeMult = 
+  let text = getFileContent juoO
+      prevState = text !! dy juoO
+      juo = case maybeMult of
+        Just mult -> loopDeleteChar juoO mult
+        Nothing -> loopDeleteChar juoO 1
+  in
+    juo { undoHistory = DS.push [(dy juoO, prevState)] (undoHistory juo) }
+  where
+    loopDeleteChar :: Juo -> Int -> Juo
+    loopDeleteChar juo 0 = juo
+    loopDeleteChar juo mult = do
+        let text = getFileContent juo
+            currLine = if null text then JT.DocumentLine "" 0 else text !! dy juo
+            juo' = doAtCursor juo $ \content col ->
+              take col content ++ drop (col + 1) content
+            --newMessage = show JT.Inserted ++ " `" ++ insertionBuffer juo ++ "` @ " ++ show (dx juo + 1) ++ ":" ++ show (dy juo + 1)
+        if dx juo' + 1 == JT.lineLength currLine
+          then
+            loopDeleteChar (moveCursor juo' JT.Left 1) (mult - 1)
+          else 
+            loopDeleteChar juo' (mult - 1)
 
-      text = getFileContent juo
-  if (col + 1) == lineLength currLine
-    then
-      moveCursor juo' Juo.Left 1
-    else juo'
 
 newLine :: Juo -> Juo
 newLine juo = do
-  let newLine =
-        DocumentLine
-          { lineContent = "",
-            lineLength = 0
-          }
-      newLines = take (line + 1) text ++ [newLine] ++ drop (line + 1) text
+  let nl = updateLine "" Nothing
+      nls = take (line + 1) text ++ [nl] ++ drop (line + 1) text
    in moveCursor
-        (setFileContent (juo { mode = Juo.Insert }) newLines)
-        Juo.Down
+        (setFileContent (juo { mode = JT.Insert }) nls)
+        JT.Down
         1
   where
     line = dy juo
@@ -527,25 +489,17 @@ newLine juo = do
 
 newLinePush :: Juo -> Juo
 newLinePush juo = do
-  let oldContent = take col (lineContent currLine)
-      newContent = drop col (lineContent currLine)
-      oldLine =
-        DocumentLine
-          { lineContent = oldContent,
-            lineLength = getLineLength oldContent
-          }
-      newLine =
-        DocumentLine
-          { lineContent = newContent,
-            lineLength = getLineLength newContent
-          }
-      newLines = take line text ++ [oldLine] ++ [newLine] ++ drop (line + 1) text
-   in setFileContent (juo { cx = 0, mode = Juo.Insert }) newLines
+  let oldContent = take col (JT.lineContent currLine)
+      newContent = drop col (JT.lineContent currLine)
+      ol = updateLine oldContent Nothing
+      nl = updateLine newContent Nothing
+      newLines = take line text ++ [ol] ++ [nl] ++ drop (line + 1) text
+   in setFileContent (juo { cx = 0, mode = JT.Insert }) newLines
   where
     line = dy juo
     col = dx juo
     text = getFileContent juo
-    currLine = if null text then DocumentLine "" 0 else text !! line
+    currLine = if null text then JT.DocumentLine "" 0 else text !! line
 
 deleteLine :: Juo -> Juo
 deleteLine juo = do
@@ -554,39 +508,40 @@ deleteLine juo = do
 
   if line == getFileLength _juo
     then
-      moveCursor _juo Juo.Up 1
+      moveCursor _juo JT.Up 1
     else
       _juo
   where
     line = dy juo
     text = getFileContent juo
 
--- TODO not needed
 deleteCharBefore :: Juo -> Juo
 deleteCharBefore juo = do
-  let juo' = doAtCursor juo Deleted $ \content col ->
+  let juo' = doAtCursor juo $ \content col ->
         take (col - 1) content ++ drop col content
 
       line = dy juo
       text = getFileContent juo
-      currLine = if null text then (DocumentLine "" 0) else text !! line
-  moveCursor juo' Juo.Left 1
+      currLine = if null text then JT.DocumentLine "" 0 else text !! line
+  moveCursor juo' JT.Left 1
 
 insertChar :: Juo -> Char -> Juo
 insertChar juo ch =
-  let juo' = doAtCursor juo Inserted $ \content col ->
+  let juo' = doAtCursor juo $ \content col ->
         take col content ++ [ch] ++ drop col content
-   in moveCursor juo' Juo.Right 1
+  in
+  --newMessages = fullMessageBuf juo ++ [JT.DocumentLine newMessage (length newMessage)]
+  moveCursor (juo' { insertionBuffer = insertionBuffer juo ++ [ch]}) JT.Right 1
 
 insertTab :: Juo -> Juo
 insertTab juo =
-  let juo' = doAtCursor juo Inserted $ \content col ->
+  let juo' = doAtCursor juo $ \content col ->
         take col content ++ replicate 4 ' ' ++ drop col content
-   in moveCursor juo' Juo.Right 1
+   in moveCursor juo' JT.Right 1
 
 appendChar :: Juo -> Juo
 appendChar juo =
-  moveCursor juo {mode = Juo.Insert} Juo.Right 1
+  moveCursor juo {mode = JT.Insert} JT.Right 1
 
 addCharToMessage :: Juo -> Char -> Juo
 addCharToMessage juo ch = juo {messageBuf = messageBuf juo ++ [ch]}
@@ -612,7 +567,7 @@ execCommand juo = do
     "" -> do
       let juo' =
             juo
-              { mode = Juo.Normal
+              { mode = JT.Normal
               }
       return (juo', True)
     _ -> do
@@ -620,34 +575,32 @@ execCommand juo = do
           juo' =
             juo
               { messageBuf = output,
-                mode = Juo.Normal
+                mode = JT.Normal
               }
       return (juo', True)
 
 getFileSize :: Juo -> Int
 getFileSize juo = sum (map len (getFileContent juo))
   where
-    len docLine = (lineLength docLine) + 1 -- Add 1 for '\n'
+    len docLine = JT.lineLength docLine + 1 -- Add 1 for '\n'
 
 saveFile :: Juo -> IO Juo
 saveFile juo = do
   -- TODO Might be better to chunk write
   res <-
-    try (writeFile (getFilePath juo) (unlines (map lineContent (getFileContent juo)))) ::
+    try (writeFile (getFilePath juo) (unlines (map JT.lineContent (getFileContent juo)))) ::
       IO (Either IOException ())
 
   let buf = case res of
-        Prelude.Left _ -> (show (getFilePath juo) ++ show (getFileSize juo) ++ "B failed to write")
+        Prelude.Left _ -> show (getFilePath juo) ++ show (getFileSize juo) ++ "B failed to write"
         Prelude.Right _ -> do
-          (show (getFilePath juo) ++ " " ++ show (getFileLength juo) ++ "L, " ++ show (getFileSize juo) ++ "B written")
+          show (getFilePath juo) ++ " " ++ show (getFileLength juo) ++ "L, " ++ show (getFileSize juo) ++ "B written"
 
   return
     juo
       { messageBuf = buf,
-        mode = Juo.Normal
+        mode = JT.Normal
       }
-  where
-    (winH, _) = windowSize juo
 
 
 -- | Configure theme colors based on config.
@@ -676,110 +629,150 @@ initColors conf = do
 
   HC.initPair (HC.Pair 2) (HC.Color 33) (HC.Color 69)
 
-  HC.initPair (HC.Pair 8) (HC.Color 32) (HC.Color 69)
-
+  -- Background
+  HC.initPair (HC.Pair 8) HCH.black HCH.white
   -- Mode
   HC.initPair (HC.Pair 3) (HC.Color 69) (HC.Color 44)
-
   -- Toolbar
-  HC.initPair (HC.Pair 5) (HC.Color 33) (HC.Color 72)
-
+  HC.initPair (HC.Pair 5) HCH.white HCH.black
   -- Editor
-  HC.initPair (HC.Pair 6) (HC.Color 33) (HC.Color 75)
+  HC.initPair (HC.Pair 6) HCH.black HCH.white
+  -- Gutter
+  HC.initPair (HC.Pair 7) HCH.black HCH.white
+  -- Ex Mode
+  HC.initPair (HC.Pair 10) HCH.black HCH.white
+  -- Insert Mode
+  HC.initPair (HC.Pair 11) (HC.Color 69) (HC.Color 44)
+  -- Select Mode
+  HC.initPair (HC.Pair 12) HCH.black HCH.white
 
-  HC.initPair (HC.Pair 7) (HC.Color 33) (HC.Color 76)
+-- | API function for configurable theme options.
+setColor :: JT.Window -> JT.EditorSection -> IO ()
+setColor JT.Window{..} section =
+  let color = case section of
+        JT.Background -> (HC.attr0, HC.Pair 8)
+        JT.EditorBackground -> (HC.attr0, HC.Pair 6)
+        JT.Toolbar -> (HC.attr0, HC.Pair 5)
+        JT.LeftColumn -> (HC.attr0, HC.Pair 7)
+        JT.ModeEx -> (HC.attr0, HC.Pair 10)
+        JT.ModeInsert -> (HC.attr0, HC.Pair 11)
+        JT.ModeSelect -> (HC.attr0, HC.Pair 12)
+  in
+    HC.wAttrSet win color
 
+undo :: Juo -> [(Int, JT.DocumentLine)] -> IO Juo
+undo juo [] = return juo
+undo juo ((y, line):undoneLines) = do
+  let text = getFileContent juo
+      restoredFile = take y text ++ [line] ++ drop (y + 1) text
+  
+  
+  undo (setFileContent juo { dy = y, cy = y } restoredFile) undoneLines
+
+
+-- | WARNING: Only works on positives.
+addDigit :: Int -> Int -> Int
+addDigit x y = 10 * x + y
 
 -- | A monolithic function that handles normal mode interactions
 handleNormalMode :: Juo -> Config -> HC.Key -> IO (Juo, Bool)
 handleNormalMode juo conf ch = do
-  let l = dy juo
-      c = dx juo
-      mult = if null (multBuf juo) then 1 else read (multBuf juo)
+  let mult = if multBuf juo == 0 then multBuf juo + 1 else multBuf juo
 
   case ch of
     HC.KeyChar c
 
-      | c == (delete conf) -> do
-          let _juo = deleteChar juo
-          return (_juo, True)
+      | c == delete conf -> do
+          return (deleteChar juo { commandBuf = [c], multBuf = 0} (Just mult), True)
 
-      | c `elem` ['1' .. '9'] -> do return (juo { multBuf = multBuf juo ++ [c]}, True)
+      | c `elem` ['1' .. '9'] -> do return (juo { multBuf = addDigit (multBuf juo) (digitToInt c)}, True)
 
       -- HACK: Really lazy on my part :(
-      | c == '0' -> 
-        if null (multBuf juo) 
+      | c == '0' ->
+        if multBuf juo == 0
           then
-            return ((moveCursor juo Juo.Left 999999), True)
+            return (moveCursor juo JT.Left 999999, True)
           else
-            return (juo { multBuf = multBuf juo ++ [c]}, True)
-      | c == '$' -> return ((moveCursor juo Juo.Right 999999), True)
+            return (juo { multBuf = addDigit (multBuf juo) (digitToInt c)}, True)
+      | c == '$' -> return (moveCursor juo JT.Right 999999, True)
 
-      | c == 'G' -> return ((moveCursor juo Juo.Down 999999), True)
+      | c == 'G' -> return (moveCursor juo JT.Down 999999, True)
 
-      | c `elem` ['d', 'g'] -> do 
+      -- Enters a 'sub-mode', or in other words a multi character command
+      | c `elem` ['d', 'g'] -> do
         case c of
-          'd' -> 
+          'd' ->
             setUnderscoreCursor
           _ ->
             setBlockCursor
 
         return (juo {commandBuf = commandBuf juo ++ [c]}, True)
-        
+
+      | c == 'r' -> do
+          let _juo =
+                juo
+                  { mode = JT.Normal
+                  }
+          return (_juo, True)
+
+      | c == 'u' -> do
+          let (maybeChangedLines, undoHistory') = DS.pop (undoHistory juo)
+          _juo <- 
+            case maybeChangedLines of
+              Just changedLines -> do
+                undo juo { undoHistory = undoHistory', 
+                  messageBuf = "undo #" ++ show (DS.size undoHistory' + 1) } changedLines
+              Nothing -> do
+                return juo { undoHistory = undoHistory',
+                  messageBuf = "undo stack is empty!" }
+          return (_juo, True)
+
       -- NOTE: SWITCH MODE
       | c == 'i' -> do
           let _juo =
                 juo
-                  { mode = Juo.Insert
+                  { mode = JT.Insert
                   }
           return (_juo, True)
-      | c == 'a' -> return ((appendChar juo), True)
-      | c == 'o' -> return ((newLine juo), True)
+      | c == 'a' -> return (appendChar juo, True)
+      | c == 'o' -> return (newLine juo, True)
       | c == 's' -> do
           --HC.wAttrSet HC.stdScr (CUR.attr0, (CUR.Pair 3))
 
           let _juo =
                 juo
-                  { mode = Juo.Select
+                  { mode = JT.Select
                   }
           return (_juo, True)
       | c == 'm' -> do
           let _juo =
                 juo
-                  { mode = Juo.Message
+                  { mode = JT.Message
                   }
           return (_juo, True)
-      
+
       | c == ':' -> do
           return (juo
-                  { mode = Juo.Command,
+                  { mode = JT.Command,
                     messageBuf = ""
-                  }, 
+                  },
                   True)
       | c == ';' -> do
           return (juo
-                  { mode = Juo.Command,
+                  { mode = JT.Command,
                     messageBuf = ""
-                  }, 
+                  },
                   True)
 
-      -- NOTE: NORMAL MODE SHORTCUTS
-
-      | c == 'r' -> do
-          let _juo =
-                juo
-                  { mode = Juo.Normal
-                  }
-          return (_juo, True)
       -- TODO Could add these to command buffer but doesnt seem to be necessary
-      | c == (up conf) ->
-        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Up mult), True)
-      | c == down conf -> 
-        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Down mult), True)
-      | c == (left conf) -> 
-        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Left mult), True)
-      | c == (right conf) -> 
-        return ((moveCursor (juo { commandBuf = [c], multBuf = ""}) Juo.Right mult), True)
+      | c == up conf ->
+        return (moveCursor (juo { commandBuf = [c], multBuf = 0}) JT.Up mult, True)
+      | c == down conf ->
+        return (moveCursor (juo { commandBuf = [c], multBuf = 0}) JT.Down mult, True)
+      | c == left conf ->
+        return (moveCursor (juo { commandBuf = [c], multBuf = 0}) JT.Left mult, True)
+      | c == right conf ->
+        return (moveCursor (juo { commandBuf = [c], multBuf = 0}) JT.Right mult, True)
 
       | otherwise -> return (insertNewMessage juo (keyboardCharErrMsg c), True)
 
@@ -804,27 +797,27 @@ handleNormalMode juo conf ch = do
             _ -> return (juo, True)
 
     -- NOTE: these are not configurable via config files.
-    HC.KeyUp -> return ((moveCursor juo Juo.Up (scrollDistance conf)), True)
-    HC.KeyDown -> return ((moveCursor juo Juo.Down (scrollDistance conf)), True)
+    HC.KeyUp -> return (moveCursor juo JT.Up (scrollDistance conf), True)
+    HC.KeyDown -> return (moveCursor juo JT.Down (scrollDistance conf), True)
     {-HC.KeyLeft ->
           if (mult juo) == "d"
             then do
               let _juo = juo {mult = ""}
               setBlockCursor
-              return (deleteChar (moveCursor _juo Juo.Left 1), True)
+              return (deleteChar (moveCursor _juo Left 1), True)
             else
-              return ((moveCursor juo Juo.Left 1), True)
+              return ((moveCursor juo Left 1), True)
     HC.KeyRight ->
           if (mult juo) == "d"
             then do
               let _juo = juo {mult = ""}
               setBlockCursor
-              return (deleteChar (moveCursor _juo Juo.Right 1), True)
+              return (deleteChar (moveCursor _juo JT.Right 1), True)
             else
-              return ((moveCursor juo Juo.Right 1), True)-}
+              return ((moveCursor juo JT.Right 1), True)-}
 
     key -> return (insertNewMessage juo (cursesKeyErrMsg key), True)
 
   where
-    keyboardCharErrMsg c = ("Unrecognized input: _" ++ (show c) ++ "_")
-    cursesKeyErrMsg key = ("Unrecognized input: _" ++ (show key) ++ "_")
+    keyboardCharErrMsg c = "Unrecognized input: _" ++ show c ++ "_"
+    cursesKeyErrMsg key = "Unrecognized input: _" ++ show key ++ "_"

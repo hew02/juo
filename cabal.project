@@ -1,4 +1,4 @@
-packages: .
+packages: . ./hasqtan/
 
 source-repository-package 
   type: git

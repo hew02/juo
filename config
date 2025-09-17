@@ -1,0 +1,3 @@
+let config = {
+	backgroundColor = "white"
+} in juo_config

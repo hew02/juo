@@ -19,3 +19,5 @@ Follows a lot of the same bindings of Vim.
 There are two types of commands
 - Buffered commands
 - Executable commands
+
+We distinguish these
