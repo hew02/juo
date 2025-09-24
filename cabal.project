@@ -1,4 +1,4 @@
-packages: . ./hasqtan/
+packages: . ./reva/
 
 --source-repository-package 
 --  type: git

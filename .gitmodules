@@ -1,3 +1,3 @@
-[submodule "hasqtan"]
-	path = hasqtan
-	url = https://github.com/hew02/hasqtan
+[submodule "reva"]
+	path = reva
+	url = https://github.com/hew02/reva

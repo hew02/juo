@@ -5,7 +5,6 @@ import Juo.Config
 import Juo.Draw
 import Juo.Util
 import qualified Juo.Types as JT
-
 import Data.Stack as DS
 
 import Control.Concurrent
@@ -251,67 +250,40 @@ loopJuo juo conf = do
             else read (modifier juo)-}
 -}
 
-main :: IO ()
-main = do
-  done <- newEmptyMVar
-  let handler = do
-        -- putStrLn ""
-        -- putStrLn "interrupt"
-        -- CUR.cursSet CUR.CursorVisible
-        putMVar done ()
-        exitSuccess
+usage :: IO ()
+usage = putStrLn "Usage: juo [-vh] file"
 
-  _ <- installHandler keyboardSignal (Catch handler) Nothing
-  -- takeMVar done
-  -- putStrLn "exiting"
+version :: IO ()
+version = putStrLn $ "Juo ver. 0.1\n"
 
-  args <- getArgs
-  if length args /= 1
+parseArgs :: [String] -> IO ()
+parseArgs [] = return ()
+parseArgs ("-h":args) = usage >> exitSuccess
+parseArgs ("-v":args) = version >> exitSuccess
+parseArgs [] = do
+  x <- getContents
+  putStrLn x
+parseArgs (fs:_) = do
+  setEnv "ESCDELAY" "0"
+  -- CUR.initCurses
+  CURHELP.start
+  setBlockCursor
+  has256Color <- CUR.hasColors
+  if not has256Color
     then do
-      putStrLn ("Usage: juo <filename>")
-      exitFailure
+      putStrLn "Requires full color support (i.e. xterm-256)"
+      exitSuccess
     else do
-      setEnv "ESCDELAY" "0"
-
-      -- CUR.initCurses
-      CURHELP.start
-      setBlockCursor
-      has256Color <- CUR.hasColors
-
-      if not has256Color
-        then do
-          putStrLn "Requires full color support (i.e. xterm-256)"
-          exitSuccess
-        else do
-          CUR.startColor
-
-          initColors conf
-
-          let filename = head args
-
-          res <- try (readFile filename) :: IO (Either IOException String)
-
-          let content = case res of
-                Prelude.Left _ -> "" -- Creating a new file!
-                Prelude.Right text -> text
-
-          startJuo filename content conf
+      CUR.startColor
+      initColors conf
+      let filename = fs
+      res <- try (readFile filename) :: IO (Either IOException String)
+      let content = case res of
+            Prelude.Left _ -> "" -- Creating a new file!
+            Prelude.Right text -> text
+      startJuo filename content conf
 
       exitJuo
-
-  -- isFile <- doesFileExist $ head args
-
-  -- if isFile then
-  --    let filename = head args in
-  --    openThisFile filename
-  -- else
-  --    putStrLn "Salutations my lord, your squire at your service."
-  -- putStrLn "Enter a file name:"
-  -- fname <- getLine
-  -- content <- readFile fname
-  -- putStrLn "\nFile contents:\n"
-  -- editorLoop (lines content)
-  exitSuccess
   where
     conf =
       Config
@@ -327,3 +299,40 @@ main = do
           useTerminalColor = True,
           scrollDistance = 4
         }
+{-
+   if length args /= 1
+    then do
+      putStrLn ("Usage: juo <filename>")
+      exitFailure-}
+
+main :: IO ()
+main = do
+  done <- newEmptyMVar
+  let handler = do
+        -- putStrLn ""
+        -- putStrLn "interrupt"
+        -- CUR.cursSet CUR.CursorVisible
+        putMVar done ()
+        exitSuccess
+
+  _ <- installHandler keyboardSignal (Catch handler) Nothing
+  -- takeMVar done
+  -- putStrLn "exiting"
+
+  args <- getArgs
+  parseArgs args
+
+  -- isFile <- doesFileExist $ head args
+
+  -- if isFile then
+  --    let filename = head args in
+  --    openThisFile filename
+  -- else
+  --    putStrLn "Salutations my lord, your squire at your service."
+  -- putStrLn "Enter a file name:"
+  -- fname <- getLine
+  -- content <- readFile fname
+  -- putStrLn "\nFile contents:\n"
+  -- editorLoop (lines content)
+  exitSuccess
+

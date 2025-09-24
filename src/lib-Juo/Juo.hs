@@ -38,7 +38,7 @@ import qualified Juo.Types as JT
 import qualified Data.Stack as DS
 
 import Control.Exception (IOException, try)
-import qualified Hasqtan as Hasq
+import qualified Reva as Hasq
 import System.Environment (unsetEnv)
 import System.Process (callCommand)
 import qualified UI.HSCurses.Curses as HC
@@ -166,7 +166,7 @@ newJuo maybeFile = do
   let dummyOffsetX = 2
 
   (winH, winW) <- HC.scrSize
-  _toolbarWindow <- newWindow 2 winW (winH - 2) 0
+  _toolbarWindow <- newWindow 2 (winW + 1) (winH - 2) 0
   _editorWindow <- newWindow (winH - getWindowHeight _toolbarWindow) winW 0 dummyOffsetX
 
   HC.keypad (getWindow _editorWindow) True
@@ -579,7 +579,7 @@ execCommand juo = do
               }
       return (juo', True)
     _ -> do
-      let (maybeOut, env) = Hasq.interp (messageBuf juo) (hasqtanEnv juo) (hasqtanConf juo)
+      let (maybeOut, env) = Hasq.interp Hasq.CMD (messageBuf juo) (hasqtanEnv juo) (hasqtanConf juo)
       return (
         case maybeOut of
           Just out ->
