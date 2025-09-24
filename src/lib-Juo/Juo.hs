@@ -809,6 +809,8 @@ handleNormalMode juo conf ch = do
             _ -> return (juo, True)
 
     -- NOTE: these are not configurable via config files.
+    -- TODO: This should scroll the viewport, not the cursor!
+    -- BUG: Also this is utilizing arrow keys as is evident
     HC.KeyUp -> return (moveCursor juo JT.Up (scrollDistance conf), True)
     HC.KeyDown -> return (moveCursor juo JT.Down (scrollDistance conf), True)
     {-HC.KeyLeft ->
