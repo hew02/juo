@@ -8,13 +8,14 @@ import qualified Juo.Types as JT
 import Data.Stack as DS
 
 import Control.Concurrent
-import Control.Exception (IOException, try)
+import Control.Exception (IOException, try, evaluate)
 import Control.Monad (when)
 import Data.Char
 import System.Environment (getArgs, getProgName, setEnv, unsetEnv)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath
-import System.IO (readFile)
+import System.Timeout (timeout)
+import System.IO (readFile, openFile, IOMode(..), hClose)
 import System.Posix.Signals
 import System.Process (callCommand)
 import qualified UI.HSCurses.Curses as CUR
@@ -83,6 +84,19 @@ startJuo filename content settings = do
   -- CUR.attrBoldOn
 
   -- let attr = CUR.setBold CUR.attr0 True
+  
+  -- Terminal setup 
+  setEnv "ESCDELAY" "0"
+  -- CUR.initCurses
+  CURHELP.start
+  setBlockCursor
+  has256Color <- CUR.hasColors
+  if not has256Color
+    then
+      putStrLn "Requires full color support (i.e. xterm-256)" >> exitSuccess
+    else do
+      CUR.startColor
+      initColors settings
 
   CUR.bkgrndSet CUR.attr0 (CUR.Pair 8)
 
@@ -161,7 +175,7 @@ loopJuo juo conf = do
                   | otherwise -> commandBuf juo
 
       case buf of
-        "d" -> do -- Sub-mode 'Delete'
+        "d" -> do -- NOTE: Sub-mode 'Delete'
           let _juo = juo {commandBuf = ""}
           setBlockCursor
           case ch of
@@ -173,7 +187,7 @@ loopJuo juo conf = do
               | c == right conf -> return (deleteChar (moveCursor _juo JT.Right 1) Nothing, True)
               | otherwise       -> return (_juo, True)
             _ -> return (_juo, True)  -- fallback if not a KeyChar
-        "g" -> do -- Sub-mode 'g'
+        "g" -> do -- NOTE: Sub-mode 'g'
           let _juo = juo {commandBuf = ""}
           case ch of
             CUR.KeyChar c
@@ -256,54 +270,43 @@ usage = putStrLn "Usage: juo [-vh] file"
 version :: IO ()
 version = putStrLn $ "Juo ver. 0.1\n"
 
-parseArgs :: [String] -> IO ()
-parseArgs [] = return ()
-parseArgs ("-h":args) = usage >> exitSuccess
-parseArgs ("-v":args) = version >> exitSuccess
-parseArgs [] = do
-  x <- getContents
-  putStrLn x
-parseArgs (fs:_) = do
-  setEnv "ESCDELAY" "0"
-  -- CUR.initCurses
-  CURHELP.start
-  setBlockCursor
-  has256Color <- CUR.hasColors
-  if not has256Color
-    then do
-      putStrLn "Requires full color support (i.e. xterm-256)"
-      exitSuccess
-    else do
-      CUR.startColor
-      initColors conf
-      let filename = fs
-      res <- try (readFile filename) :: IO (Either IOException String)
-      let content = case res of
-            Prelude.Left _ -> "" -- Creating a new file!
-            Prelude.Right text -> text
-      startJuo filename content conf
+conf = -- TODO: Parse config file into reva interpreter!
+  Config
+    { up = 'k',
+      down = 'j',
+      left = 'h',
+      right = 'l',
+      delete = 'x',
+      cursorCmd = ':',
+      showLineNumbers = False,
+      tabDepth = 3, -- 0-indexed, so *really* 4
+      toolbarBgColor = (255, 255, 255),
+      useTerminalColor = True,
+      scrollDistance = 4
+    }
 
+parseArgs :: [String] -> IO ()
+parseArgs [] = do -- Piping input
+  maybePipe <- timeout 10000 (evaluate getContents) -- 10,000 microseconds
+  case maybePipe of
+    Nothing -> do
+      usage >> exitFailure
+    Just inp -> do
+      content <- inp
+      startJuo "" content conf
+      -- Running
       exitJuo
-  where
-    conf =
-      Config
-        { up = 'k',
-          down = 'j',
-          left = 'h',
-          right = 'l',
-          delete = 'x',
-          cursorCmd = ':',
-          showLineNumbers = False,
-          tabDepth = 3, -- 0-indexed, so *really* 4
-          toolbarBgColor = (255, 255, 255),
-          useTerminalColor = True,
-          scrollDistance = 4
-        }
-{-
-   if length args /= 1
-    then do
-      putStrLn ("Usage: juo <filename>")
-      exitFailure-}
+parseArgs ("-h":_) = usage >> exitSuccess
+parseArgs ("-v":_) = version >> exitSuccess
+parseArgs (fs:_) = do 
+  res <- try (readFile fs) :: IO (Either IOException String)
+  let content = case res of
+        Prelude.Left _ -> "" -- Creating a new file!
+        Prelude.Right text -> text
+  startJuo fs content conf
+  -- Running
+  exitJuo
+
 
 main :: IO ()
 main = do
