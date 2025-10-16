@@ -210,7 +210,7 @@ exitJuo :: IO ()
 exitJuo = do
   -- CUR.endWin
   HCH.end
-  callCommand "stty sane"
+  --callCommand "stty sane"
   unsetEnv "ESCDELAY"
 
 -- | Get number of tabs before current document position.
@@ -642,15 +642,15 @@ initColors conf = do
   HC.initPair (HC.Pair 2) (HC.Color 33) (HC.Color 69)
 
   -- Background
-  HC.initPair (HC.Pair 8) HCH.black HCH.white
+  HC.initPair (HC.Pair 8) HCH.white HCH.black 
   -- Mode
   HC.initPair (HC.Pair 3) (HC.Color 69) (HC.Color 44)
   -- Toolbar
   HC.initPair (HC.Pair 5) HCH.white HCH.black
   -- Editor
-  HC.initPair (HC.Pair 6) HCH.black HCH.white
+  HC.initPair (HC.Pair 6) HCH.white HCH.black 
   -- Gutter
-  HC.initPair (HC.Pair 7) HCH.black HCH.white
+  HC.initPair (HC.Pair 7) HCH.white HCH.black 
   -- Ex Mode
   HC.initPair (HC.Pair 10) HCH.black HCH.white
   -- Insert Mode

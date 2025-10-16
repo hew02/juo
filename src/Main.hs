@@ -15,7 +15,7 @@ import System.Environment (getArgs, getProgName, setEnv, unsetEnv)
 import System.Exit (exitFailure, exitSuccess)
 import System.FilePath
 import System.Timeout (timeout)
-import System.IO (readFile, openFile, IOMode(..), hClose)
+import System.IO (readFile, openFile, IOMode(..), hClose, stdin, hIsTerminalDevice)
 import System.Posix.Signals
 import System.Process (callCommand)
 import qualified UI.HSCurses.Curses as CUR
@@ -51,18 +51,19 @@ updateLastChar juo ch =
 parseFile :: FileName -> FullText -> JT.File
 parseFile filename text =
   let fileType = case takeExtension filename of
-        ".hs" -> JT.Haskell
-        ".lhs" -> JT.Haskell
-        ".txt" -> JT.PlainText
-        ".md" -> JT.Markdown
-        ".c" -> JT.C
-        ".cpp" -> JT.Cpp
-        ".c++" -> JT.Cpp
-        ".cc" -> JT.Cpp
+        ".hs"   -> JT.Haskell
+        ".lhs"  -> JT.Haskell
+        ".txt"  -> JT.PlainText
+        ".md"   -> JT.Markdown
+        ".c"    -> JT.C
+        ".cpp"  -> JT.Cpp
+        ".c++"  -> JT.Cpp
+        ".cc"   -> JT.Cpp
         ".java" -> JT.Java
-        ".ml" -> JT.OCaml
-        ".mli" -> JT.OCaml
-        ext -> JT.Unknown ext
+        ".ml"   -> JT.OCaml
+        ".mli"  -> JT.OCaml
+        ".pas"  -> JT.Pascal
+        ext     -> JT.Unknown ext
 
       ls = lines text
       ds = parseLine ls
@@ -270,6 +271,7 @@ usage = putStrLn "Usage: juo [-vh] file"
 version :: IO ()
 version = putStrLn $ "Juo ver. 0.1\n"
 
+conf :: Config
 conf = -- TODO: Parse config file into reva interpreter!
   Config
     { up = 'k',
@@ -287,15 +289,17 @@ conf = -- TODO: Parse config file into reva interpreter!
 
 parseArgs :: [String] -> IO ()
 parseArgs [] = do -- Piping input
-  maybePipe <- timeout 10000 (evaluate getContents) -- 10,000 microseconds
-  case maybePipe of
-    Nothing -> do
-      usage >> exitFailure
-    Just inp -> do
-      content <- inp
-      startJuo "" content conf
-      -- Running
-      exitJuo
+  isPiped <- not <$> hIsTerminalDevice stdin
+  inputContent <- if isPiped 
+    then do
+      getContents
+    else
+      return ""
+      
+  startJuo "" inputContent conf
+  -- Running
+  exitJuo
+
 parseArgs ("-h":_) = usage >> exitSuccess
 parseArgs ("-v":_) = version >> exitSuccess
 parseArgs (fs:_) = do 

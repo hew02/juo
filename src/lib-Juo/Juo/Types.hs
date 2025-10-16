@@ -26,9 +26,10 @@ data FileType
   | Markdown
   | C
   | Cpp
-  | Hasqtan
+  | Reva 
   | Java
   | OCaml
+  | Pascal
   | Unknown String
   deriving (Eq)
 
@@ -38,9 +39,10 @@ instance Show FileType where
   show Markdown = "Markdown"
   show C = "C"
   show Cpp = "C++"
-  show Hasqtan = "Hasqtan"
+  show Reva = "Reva"
   show Java = "Java"
   show OCaml = "OCaml"
+  show Pascal = "Pascal"
   show (Unknown other) = other
 
 
